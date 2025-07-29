@@ -29,7 +29,7 @@ See `revenue_update/revenue_power_automate.txt` for a copy of the Power Automate
 python update_revenue.py 202504
 ```
 
-### `bank_reconciliation/bank3.py`
+### `bank_reconciliation/bank.py`
 
 Processes bank statement files (e.g., from Citibank):
 

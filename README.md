@@ -1,6 +1,6 @@
-# Wistron Finance Automation
+# Finance Automation
 
-This repository contains automation scripts developed for the Wistron finance team to streamline repetitive reporting and reconciliation tasks. The project is organized into submodules for revenue reporting and bank reconciliation.
+This repository contains automation scripts developed for the finance team to streamline repetitive reporting and reconciliation tasks. The project is organized into submodules for revenue reporting and bank reconciliation.
 
 
 ## 🔧 Scripts Overview

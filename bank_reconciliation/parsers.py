@@ -254,3 +254,72 @@ class FubonParser(BankParserBase):
 
         print(f"🔍 Loaded {len(rows)} entries from {self.path.name}")
         return rows
+    
+    
+class SinopacParser(BankParserBase):
+    """
+    Parses 1000-永豐-*.xls/.xlsx
+    - Header row has '存入' in column F
+    - Customer name sits under '備註' in column J
+    - Stop when you hit a truly blank customer cell
+    """
+    SHEET_NAME     = "工作表1"   # or leave None to use the first sheet
+    AMOUNT_COL     = "F"
+    CUSTOMER_COL   = "J"
+    HEADER_KEYWORD = "存入"
+
+    def extract_rows(self):
+        sheet = load_sheet(self.path,
+                           sheet=self.SHEET_NAME,
+                           header=None)
+
+        rows = []
+        # .xlsx path
+        if isinstance(sheet, openpyxl.worksheet.worksheet.Worksheet):
+            ws = sheet
+            # 1) locate header row in column F
+            hdr = None
+            for r in range(1, ws.max_row+1):
+                if ws[f"{self.AMOUNT_COL}{r}"].value == self.HEADER_KEYWORD:
+                    hdr = r
+                    break
+            if hdr is None:
+                raise RuntimeError(f"No '{self.HEADER_KEYWORD}' in {self.path.name}")
+
+            # 2) read down until customer cell is blank
+            r = hdr + 1
+            while r <= ws.max_row:
+                cust = ws[f"{self.CUSTOMER_COL}{r}"].value
+                amt  = ws[f"{self.AMOUNT_COL}{r}"].value
+
+                # stop on blank customer
+                if cust is None or not str(cust).strip():
+                    break
+
+                cust_text = str(cust).strip()
+                # normalize amt → float if it's text
+                if isinstance(amt, str):
+                    amt = float(amt.replace(",", ""))
+                rows.append((cust_text, amt))
+                r += 1
+
+        # .xls path via pandas
+        else:
+            df: pd.DataFrame = sheet
+            # A=0, F=5, J=9
+            header_rows = df[df[5] == self.HEADER_KEYWORD].index
+            if header_rows.empty:
+                raise RuntimeError(f"No '{self.HEADER_KEYWORD}' in {self.path.name}")
+            hdr = header_rows[0]
+
+            for idx in range(hdr + 1, len(df)):
+                cust = df.at[idx, 9]
+                if pd.isna(cust) or not str(cust).strip():
+                    break
+                amt = df.at[idx, 5]
+                if isinstance(amt, str):
+                    amt = float(amt.replace(",", ""))
+                rows.append((str(cust).strip(), amt))
+
+        print(f"🔍 Loaded {len(rows)} entries from {self.path.name}")
+        return rows

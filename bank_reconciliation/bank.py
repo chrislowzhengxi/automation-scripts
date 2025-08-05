@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 from pathlib import Path
-from parsers import CitiParser, CTBCParser, MegaParser, FubonParser, BankParserBase
+from parsers import CitiParser, CTBCParser, MegaParser, FubonParser, SinopacParser, BankParserBase
 
 PARSER_REGISTRY = {
     "花旗": CitiParser,
     "中信": CTBCParser,
     "兆豐": MegaParser,
     "富邦": FubonParser,
+    "永豐": SinopacParser,
     # …more banks later…
 }
 
@@ -45,6 +46,7 @@ BANK_MAP = {
     "中信": "中信營業 NTD 0800",
     "兆豐": "兆豐竹科新安 NTD 2656",
     "富邦": "富邦仁愛 NTD 6332",
+    "永豐": "永豐城中 NTD 7978",
 
     # …add more banks here…
 }

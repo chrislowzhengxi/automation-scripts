@@ -90,53 +90,6 @@ class CTBCParser(BankParserBase):
         return rows
 
 
-# class MegaParser(BankParserBase):
-#     """
-#     Parses 1000-兆豐-*.xlsx
-#     - Header row has '存入金額' in column F
-#     - Customer name sits under '備註' in column H
-#     - Stop reading once column D contains '總計'
-#     """
-#     SHEET_NAME     = 0        # single‐sheet workbooks
-#     AMOUNT_COL     = "F"
-#     CUSTOMER_COL   = "H"
-#     STOP_COL       = "D"
-#     HEADER_KEYWORD = "存入金額"
-#     STOP_TOKEN     = "總計"
-
-#     def extract_rows(self):
-#         # wb = openpyxl.load_workbook(self.path, data_only=True)
-#         # ws = wb.active
-#         sheet = load_sheet(self.path, sheet=self.SHEET, header=None)
-
-#         # 1) find header row in column F
-#         hdr = None
-#         for r in range(1, ws.max_row + 1):
-#             if ws[f"{self.AMOUNT_COL}{r}"].value == self.HEADER_KEYWORD:
-#                 hdr = r
-#                 break
-#         if hdr is None:
-#             raise RuntimeError(f"No '{self.HEADER_KEYWORD}' in {self.path.name}")
-
-#         # 2) read data until we hit '總計' in column D
-#         rows = []
-#         r = hdr + 1
-#         while r <= ws.max_row:
-#             # if this row is the grand‐total/subtotal row, stop completely
-#             if ws[f"{self.STOP_COL}{r}"].value == self.STOP_TOKEN:
-#                 break
-
-#             cust = ws[f"{self.CUSTOMER_COL}{r}"].value
-#             amt  = ws[f"{self.AMOUNT_COL}{r}"].value
-
-#             # if customer cell is empty (unlikely for this bank), also stop
-#             if cust is None or not str(cust).strip():
-#                 break
-
-#             rows.append((str(cust).strip(), amt))
-#             r += 1
-
-#         return rows
 class MegaParser(BankParserBase):
     """
     Parses 1000-兆豐-*.xls[x]
@@ -219,3 +172,85 @@ class MegaParser(BankParserBase):
 
         else:
             raise TypeError(f"Unexpected sheet type: {type(sheet)}")
+        
+
+class FubonParser(BankParserBase):
+    """
+    Parses 1000-富邦-*.xls/.xlsx
+    - Header row has '存入金額' in column F
+    - Customer name sits under '附言' in column I
+    - Stop reading once column A contains '小計'
+    """
+    SHEET_NAME     = "報表"      
+    AMOUNT_COL     = "F"
+    CUSTOMER_COL   = "I"
+    HEADER_KEYWORD = "存入金額"
+    STOP_TOKEN     = "小計"
+
+    def extract_rows(self):
+        # load_sheet will return openpyxl.Worksheet for .xlsx, DataFrame for .xls
+        sheet = load_sheet(self.path, sheet=self.SHEET_NAME, header=None)
+
+        rows = []
+        if isinstance(sheet, openpyxl.worksheet.worksheet.Worksheet):
+            # ── .xlsx path
+            ws = sheet
+            # 1) find header row
+            hdr = None
+            for r in range(1, ws.max_row + 1):
+                if ws[f"{self.AMOUNT_COL}{r}"].value == self.HEADER_KEYWORD:
+                    hdr = r
+                    break
+            if hdr is None:
+                raise RuntimeError(f"No '{self.HEADER_KEYWORD}' in {self.path.name}")
+
+            # 2) walk down until you see '小計' in column A
+            r = hdr + 1
+            while r <= ws.max_row:
+                if ws[f"A{r}"].value == self.STOP_TOKEN:
+                    break
+
+                raw = ws[f"{self.AMOUNT_COL}{r}"].value
+                cust = ws[f"{self.CUSTOMER_COL}{r}"].value
+
+                if cust is None or not str(cust).strip():
+                    break
+
+                # — normalize amt to float if it's a string —
+                if isinstance(raw, str):
+                    amt = float(raw.replace(",", ""))
+                else:
+                    amt = raw
+                
+                rows.append((str(cust).strip(), amt))
+                r += 1
+
+        else:
+            # ── .xls path via pandas DataFrame
+            df: pd.DataFrame = sheet
+            # column letters → zero-based indices: A=0, F=5, I=8
+            # 1) find header row where col 5 == HEADER_KEYWORD
+            header_rows = df[df[5] == self.HEADER_KEYWORD].index
+            if header_rows.empty:
+                raise RuntimeError(f"No '{self.HEADER_KEYWORD}' in {self.path.name}")
+            hdr = header_rows[0]
+
+            # 2) read until you hit STOP_TOKEN in column 0
+            for idx in range(hdr + 1, len(df)):
+                if df.at[idx, 0] == self.STOP_TOKEN:
+                    break
+
+                cust = df.at[idx, 8]  # 附言
+                amt  = df.at[idx, 5]  # 存入金額
+
+                if pd.isna(cust) or not str(cust).strip():
+                    break
+
+                # optional: convert amt string with commas to float
+                if isinstance(amt, str):
+                    amt = float(amt.replace(",", ""))
+
+                rows.append((str(cust).strip(), amt))
+
+        print(f"🔍 Loaded {len(rows)} entries from {self.path.name}")
+        return rows

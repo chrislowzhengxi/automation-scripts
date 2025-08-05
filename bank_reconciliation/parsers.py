@@ -2,6 +2,7 @@ import openpyxl
 from pathlib import Path
 import pandas as pd
 from utils import load_sheet
+from typing import Union
 
 
 
@@ -89,49 +90,132 @@ class CTBCParser(BankParserBase):
         return rows
 
 
+# class MegaParser(BankParserBase):
+#     """
+#     Parses 1000-兆豐-*.xlsx
+#     - Header row has '存入金額' in column F
+#     - Customer name sits under '備註' in column H
+#     - Stop reading once column D contains '總計'
+#     """
+#     SHEET_NAME     = 0        # single‐sheet workbooks
+#     AMOUNT_COL     = "F"
+#     CUSTOMER_COL   = "H"
+#     STOP_COL       = "D"
+#     HEADER_KEYWORD = "存入金額"
+#     STOP_TOKEN     = "總計"
+
+#     def extract_rows(self):
+#         # wb = openpyxl.load_workbook(self.path, data_only=True)
+#         # ws = wb.active
+#         sheet = load_sheet(self.path, sheet=self.SHEET, header=None)
+
+#         # 1) find header row in column F
+#         hdr = None
+#         for r in range(1, ws.max_row + 1):
+#             if ws[f"{self.AMOUNT_COL}{r}"].value == self.HEADER_KEYWORD:
+#                 hdr = r
+#                 break
+#         if hdr is None:
+#             raise RuntimeError(f"No '{self.HEADER_KEYWORD}' in {self.path.name}")
+
+#         # 2) read data until we hit '總計' in column D
+#         rows = []
+#         r = hdr + 1
+#         while r <= ws.max_row:
+#             # if this row is the grand‐total/subtotal row, stop completely
+#             if ws[f"{self.STOP_COL}{r}"].value == self.STOP_TOKEN:
+#                 break
+
+#             cust = ws[f"{self.CUSTOMER_COL}{r}"].value
+#             amt  = ws[f"{self.AMOUNT_COL}{r}"].value
+
+#             # if customer cell is empty (unlikely for this bank), also stop
+#             if cust is None or not str(cust).strip():
+#                 break
+
+#             rows.append((str(cust).strip(), amt))
+#             r += 1
+
+#         return rows
 class MegaParser(BankParserBase):
     """
-    Parses 1000-兆豐-*.xlsx
+    Parses 1000-兆豐-*.xls[x]
     - Header row has '存入金額' in column F
     - Customer name sits under '備註' in column H
     - Stop reading once column D contains '總計'
     """
-    SHEET_NAME     = None        # single‐sheet workbooks
-    AMOUNT_COL     = "F"
-    CUSTOMER_COL   = "H"
-    STOP_COL       = "D"
+    SHEET      = 0           # single‐sheet workbooks
+    AMOUNT_COL = "F"
+    CUSTOMER_COL = "H"
+    STOP_COL   = "D"
     HEADER_KEYWORD = "存入金額"
-    STOP_TOKEN     = "總計"
+    STOP_TOKEN = "總計"
 
-    def extract_rows(self):
-        wb = openpyxl.load_workbook(self.path, data_only=True)
-        ws = wb.active
+    def extract_rows(self) -> list[tuple[str, float]]:
+        # load_sheet will return either:
+        #  - openpyxl.Worksheet for .xlsx
+        #  - pandas.DataFrame   for .xls
+        sheet = load_sheet(self.path, sheet=self.SHEET, header=None)
 
-        # 1) find header row in column F
-        hdr = None
-        for r in range(1, ws.max_row + 1):
-            if ws[f"{self.AMOUNT_COL}{r}"].value == self.HEADER_KEYWORD:
-                hdr = r
-                break
-        if hdr is None:
-            raise RuntimeError(f"No '{self.HEADER_KEYWORD}' in {self.path.name}")
+        # --- XLSX path (openpyxl) ---
+        if isinstance(sheet, openpyxl.worksheet.worksheet.Worksheet):
+            ws = sheet
+            # 1) find header row in column F
+            hdr = None
+            for r in range(1, ws.max_row + 1):
+                if ws[f"{self.AMOUNT_COL}{r}"].value == self.HEADER_KEYWORD:
+                    hdr = r
+                    break
+            if hdr is None:
+                raise RuntimeError(f"No '{self.HEADER_KEYWORD}' in {self.path.name}")
 
-        # 2) read data until we hit '總計' in column D
-        rows = []
-        r = hdr + 1
-        while r <= ws.max_row:
-            # if this row is the grand‐total/subtotal row, stop completely
-            if ws[f"{self.STOP_COL}{r}"].value == self.STOP_TOKEN:
-                break
+            # 2) walk until STOP_TOKEN in column D
+            rows = []
+            r = hdr + 1
+            while r <= ws.max_row:
+                if ws[f"{self.STOP_COL}{r}"].value == self.STOP_TOKEN:
+                    break
 
-            cust = ws[f"{self.CUSTOMER_COL}{r}"].value
-            amt  = ws[f"{self.AMOUNT_COL}{r}"].value
+                cust = ws[f"{self.CUSTOMER_COL}{r}"].value
+                amt  = ws[f"{self.AMOUNT_COL}{r}"].value
 
-            # if customer cell is empty (unlikely for this bank), also stop
-            if cust is None or not str(cust).strip():
-                break
+                if cust is None or not str(cust).strip():
+                    break
 
-            rows.append((str(cust).strip(), amt))
-            r += 1
+                rows.append((str(cust).strip(), amt))
+                r += 1
 
-        return rows
+            return rows
+
+        # --- XLS path (pandas) ---
+        elif isinstance(sheet, pd.DataFrame):
+            df: pd.DataFrame = sheet
+            # column letters to 0-based indices: D=3, F=5, H=7
+            COL_D, COL_F, COL_H = 3, 5, 7
+
+            # 1) find header row by matching HEADER_KEYWORD in column F
+            mask = df[COL_F] == self.HEADER_KEYWORD
+            if not mask.any():
+                raise RuntimeError(f"No '{self.HEADER_KEYWORD}' in {self.path.name}")
+            hdr = mask.idxmax()  # first occurrence
+
+            # 2) iterate until STOP_TOKEN appears in column D
+            rows: list[tuple[str, float]] = []
+            for idx in range(hdr + 1, len(df)):
+                if df.at[idx, COL_D] == self.STOP_TOKEN:
+                    break
+
+                cust = df.at[idx, COL_H]
+                if pd.isna(cust) or not str(cust).strip():
+                    break
+
+                amt = df.at[idx, COL_F]
+                # optionally convert comma‐thousands to float
+                amt = float(amt.replace(",", "")) if isinstance(amt, str) else amt
+
+                rows.append((cust.strip(), amt))
+
+            return rows
+
+        else:
+            raise TypeError(f"Unexpected sheet type: {type(sheet)}")

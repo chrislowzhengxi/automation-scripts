@@ -1,5 +1,6 @@
 import openpyxl
 from pathlib import Path
+import pandas as pd
 
 
 class BankParserBase:
@@ -47,37 +48,38 @@ class CitiParser(BankParserBase):    # your existing logic
 
 
 class CTBCParser(BankParserBase):
-    """
-    Parses 1000-中信-*.xls
-    - Header row has '備註' (customer) in column J
-    - Credit amount lies in column E under '轉入/匯款金額'
-    """
-    SHEET_NAME     = None      # CTBC is the only sheet
+    SHEET_NAME     = None       # .xls has only one sheet
     CUSTOMER_COL   = "J"
     AMOUNT_COL     = "E"
     HEADER_KEYWORD = "備註"
 
     def extract_rows(self):
-        wb = openpyxl.load_workbook(self.path, data_only=True)
-        ws = wb.active
+        # 1) read entire sheet into a DataFrame (no header row)
+        df = pd.read_excel(
+            self.path,
+            sheet_name=0,
+            header=None,
+            engine="xlrd",
+            dtype=str   # read everything as strings to preserve formatting
+        )
 
-        # find the “備註” header
-        hdr = None
-        for r in range(1, ws.max_row+1):
-            if ws[f"{self.CUSTOMER_COL}{r}"].value == self.HEADER_KEYWORD:
-                hdr = r
-                break
-        if hdr is None:
+        # 2) locate your header row by scanning column J
+        #    column J → DataFrame column index 9 (0-based)
+        header_rows = df[df[9] == self.HEADER_KEYWORD].index
+        if header_rows.empty:
             raise RuntimeError(f"No '{self.HEADER_KEYWORD}' in {self.path.name}")
+        hdr = header_rows[0]
 
+        # 3) pull out everything below that until you hit a blank in J
         rows = []
-        r = hdr + 1
-        while True:
-            cust = ws[f"{self.CUSTOMER_COL}{r}"].value
-            if cust is None or not str(cust).strip():
+        for idx in range(hdr + 1, len(df)):
+            cust = df.at[idx, 9]   # column J
+            if pd.isna(cust) or not str(cust).strip():
                 break
-            amt = ws[f"{self.AMOUNT_COL}{r}"].value
-            rows.append((str(cust).strip(), amt))
-            r += 1
+            amt = df.at[idx, 4]    # column E → index 4
+            # convert amount to float if you like
+            amt = float(amt.replace(",", "")) if isinstance(amt, str) else amt
+            rows.append((cust.strip(), amt))
 
+        print(f"Loaded {len(rows)} entries from {self.path.name}")
         return rows

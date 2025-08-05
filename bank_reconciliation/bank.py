@@ -1,4 +1,21 @@
 #!/usr/bin/env python3
+from pathlib import Path
+from parsers import CitiParser, CTBCParser, BankParserBase
+
+PARSER_REGISTRY = {
+    "花旗": CitiParser,
+    "中信": CTBCParser,
+    # …more banks later…
+}
+
+def make_parser(path: Path) -> BankParserBase:
+    stem = path.stem
+    for key, cls in PARSER_REGISTRY.items():
+        if key in stem:
+            return cls(path)
+    raise RuntimeError(f"No parser registered for {path.name}")
+
+
 import argparse
 import pandas as pd
 import openpyxl
@@ -23,7 +40,7 @@ KEYWORD  = "細節描述"
 
 BANK_MAP = {
     "花旗": "花旗營業 NTD 0005",
-    "玉山": "玉山營業",
+    "中信": "中信營業 NTD 0800"
     # …add more banks here…
 }
 
@@ -31,37 +48,42 @@ BANK_MAP = {
 
 def parse_args():
     p = argparse.ArgumentParser()
+    p.add_argument(
+        "--file", "-f",
+        required=True,
+        help="Path to the bank statement Excel file (xls or xlsx)"
+    )
     p.add_argument("--date", "-d",
                    help="Posting date in YYYYMMDD (defaults to today)")
     return p.parse_args()
 
 
-def load_bank_entries(bank_path, sheet, desc_col, amt_col, keyword):
-    wb = openpyxl.load_workbook(bank_path, data_only=True)
-    ws = wb[sheet]
+# def load_bank_entries(bank_path, sheet, desc_col, amt_col, keyword):
+#     wb = openpyxl.load_workbook(bank_path, data_only=True)
+#     ws = wb[sheet]
 
-    # find all header hits
-    hits = [r for r in range(1, ws.max_row+1)
-            if ws[f"{desc_col}{r}"].value == keyword]
-    if not hits:
-        raise RuntimeError(f"No '{keyword}' header in {bank_path.name}")
+#     # find all header hits
+#     hits = [r for r in range(1, ws.max_row+1)
+#             if ws[f"{desc_col}{r}"].value == keyword]
+#     if not hits:
+#         raise RuntimeError(f"No '{keyword}' header in {bank_path.name}")
 
-    # choose second hit if available
-    hdr = hits[1] if len(hits) > 1 else hits[0]
-    start = hdr + 2
+#     # choose second hit if available
+#     hdr = hits[1] if len(hits) > 1 else hits[0]
+#     start = hdr + 2
 
-    entries = []
-    r = start
-    while True:
-        txt = ws[f"{desc_col}{r}"].value
-        if txt is None or not str(txt).strip():
-            break
-        amt = ws[f"{amt_col}{r}"].value
-        entries.append((str(txt).strip(), amt))
-        r += 1
+#     entries = []
+#     r = start
+#     while True:
+#         txt = ws[f"{desc_col}{r}"].value
+#         if txt is None or not str(txt).strip():
+#             break
+#         amt = ws[f"{amt_col}{r}"].value
+#         entries.append((str(txt).strip(), amt))
+#         r += 1
 
-    print(f"Loaded {len(entries)} entries from {bank_path.name}")
-    return entries
+#     print(f"Loaded {len(entries)} entries from {bank_path.name}")
+#     return entries
 
 def detect_bank(stem, bank_map):
     for key, display in bank_map.items():
@@ -214,17 +236,24 @@ def write_output(matches, template_path, post_date):
 
 
 
-def main(post_date):
-    # 1) Load bank entries
-    entries = load_bank_entries(
-        BANK_FILE, BANK_SHEET,
-        desc_col=COL_DESC, amt_col=COL_AMT,
-        keyword=KEYWORD
-    )
+def main():
+    args      = parse_args()
+    post_date = args.date or datetime.today().strftime("%Y%m%d")
 
-    # 2) Detect which bank we’re processing
-    stem = Path(BANK_FILE).stem
-    bank_display = detect_bank(stem, BANK_MAP)
+    bank_path = Path(args.file).expanduser()
+    parser    = make_parser(bank_path)
+    entries   = parser.extract_rows()
+    print(f"🔍 Loaded {len(entries)} entries from {bank_path.name}")
+
+
+    # # 1) pick the right parser & extract
+    # parser  = make_parser(BANK_FILE)
+    # entries = parser.extract_rows()
+    # print(f"🔍 Loaded {len(entries)} entries from {BANK_FILE.name}")
+
+    # # 2) Detect which bank we’re processing
+    # stem = Path(BANK_FILE).stem
+    bank_display = detect_bank(bank_path.stem, BANK_MAP)
 
     # 3) Load & filter the customer DB
     db = load_and_filter_db(DB_FILE, DB_SHEET, bank_display)
@@ -238,6 +267,7 @@ def main(post_date):
     write_output(matches, OUTPUT_FILE, post_date)
 
 if __name__ == "__main__":
-    args     = parse_args()
-    post_date = args.date or datetime.today().strftime("%Y%m%d")
-    main(post_date)
+    main()
+    # args     = parse_args()
+    # post_date = args.date or datetime.today().strftime("%Y%m%d")
+    # main(post_date)

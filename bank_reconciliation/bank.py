@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from pathlib import Path
 from parsers import CitiParser, CTBCParser, MegaParser, FubonParser, SinopacParser, ESunParser, BankParserBase
+from fuzzy_matcher import match_entries_interactive, match_entries_debug
 
 PARSER_REGISTRY = {
     "花旗": CitiParser,
@@ -80,49 +81,6 @@ def load_and_filter_db(db_path, sheet, bank_display):
     filtered = df[df["B"].astype(str).str.contains(bank_display)]
     print(f"Filtered DB to {len(filtered)} rows for '{bank_display}'")
     return filtered
-
-# ─────────────── 4) MATCH & DEBUG ───────────────
-def match_entries_debug(entries, db, threshold=80):
-    """Return [(raw_text, amount, db_row)] with verbose logs."""
-    keywords = db["E"].astype(str).str.strip().tolist()
-    matches  = []
-
-    for raw_txt, amt in entries:
-        print("\n🔎 BANK ROW")
-        print(f"   Text   : {raw_txt!r}")
-        print(f"   Amount : {amt}")
-
-        # 4-a) exact substring in db["E"]
-        clean   = raw_txt.replace(" ", "")
-        subset  = db[db["E"].apply(lambda k: str(k).replace(' ', '') in clean)]
-        if not subset.empty:
-            hit = subset.iloc[0]
-            print("   ✅ Exact match:")
-            print(f"      Keyword     : {hit['E']!r}")
-            print(f"      Customer ID : {hit['F']}  Clean Name : {hit['G']!r}")
-            matches.append((raw_txt, amt, hit))
-            continue
-
-        # 4-b) fuzzy fallback
-        best = process.extractOne(
-            clean, keywords, scorer=fuzz.partial_ratio
-        )
-        if best:
-            best_kw, score, _ = best
-            print(f"   ➡️  Fuzzy best : {best_kw!r}  (score {score:.1f})")
-            if score >= threshold:
-                idx = keywords.index(best_kw)
-                hit = db.iloc[idx]
-                print("   ✅ Accepted fuzzy match")
-                matches.append((raw_txt, amt, hit))
-                continue
-            else:
-                print(f"   ⚠️  Score {score:.1f} < threshold {threshold}")
-        else:
-            print("   ⚠️  No fuzzy candidate at all")
-
-    print(f"\n🔗 Matched {len(matches)}/{len(entries)} rows")
-    return matches
 
 # ─────────────── 5) WRITE OUTPUT ───────────────
 def write_output(matches, template_path, post_date):
@@ -239,8 +197,11 @@ def main():
     db = load_and_filter_db(DB_FILE, DB_SHEET, bank_display)
 
     # # 4) Match
-    matches = match_entries_debug(entries, db, FUZZY_THRESHOLD)
-
+    # matches = match_entries_debug(entries, db, FUZZY_THRESHOLD)
+    matches, skipped = match_entries_interactive(entries, db, FUZZY_THRESHOLD)
+    if skipped:
+        log_skipped(skipped, filepath="skipped.csv")
+        
     print(f"DEBUG  → matches found: {len(matches)}")
     
     # 5) (next: write out your two‐row blocks into the output template)

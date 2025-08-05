@@ -255,7 +255,7 @@ class FubonParser(BankParserBase):
         print(f"🔍 Loaded {len(rows)} entries from {self.path.name}")
         return rows
     
-    
+
 class SinopacParser(BankParserBase):
     """
     Parses 1000-永豐-*.xls/.xlsx
@@ -319,6 +319,86 @@ class SinopacParser(BankParserBase):
                 amt = df.at[idx, 5]
                 if isinstance(amt, str):
                     amt = float(amt.replace(",", ""))
+                rows.append((str(cust).strip(), amt))
+
+        print(f"🔍 Loaded {len(rows)} entries from {self.path.name}")
+        return rows
+
+
+class ESunParser(BankParserBase):
+    """
+    Parses 1000-玉山-*.xls/.xlsx
+    - Header row has '存' in column G
+    - Deposit amount in column G
+    - Customer name under '備註' in column I
+    - Stop reading once column B contains '總計'
+    """
+    SHEET_NAME     = "工作表1"
+    AMOUNT_COL     = "G"
+    CUSTOMER_COL   = "I"
+    HEADER_KEYWORD = "存"
+    STOP_TOKEN     = "總計"
+
+    def extract_rows(self):
+        # load_sheet gives openpyxl WS or pandas DF
+        sheet = load_sheet(self.path, sheet=self.SHEET_NAME, header=None)
+        rows = []
+
+        # —— .xlsx path —— 
+        if isinstance(sheet, openpyxl.worksheet.worksheet.Worksheet):
+            ws = sheet
+            # 1) find the header row in G
+            hdr = None
+            for r in range(1, ws.max_row + 1):
+                if ws[f"{self.AMOUNT_COL}{r}"].value == self.HEADER_KEYWORD:
+                    hdr = r
+                    break
+            if hdr is None:
+                raise RuntimeError(f"No '{self.HEADER_KEYWORD}' in {self.path.name}")
+
+            # 2) walk down until B == '總計'
+            r = hdr + 1
+            while r <= ws.max_row:
+                if ws[f"B{r}"].value == self.STOP_TOKEN:
+                    break
+
+                cust = ws[f"{self.CUSTOMER_COL}{r}"].value
+                amt  = ws[f"{self.AMOUNT_COL}{r}"].value
+
+                # if blank customer, stop
+                if cust is None or not str(cust).strip():
+                    break
+
+                # normalize strings to floats
+                if isinstance(amt, str):
+                    amt = float(amt.replace(",", ""))
+                rows.append((str(cust).strip(), amt))
+                r += 1
+
+        # —— .xls path —— 
+        else:
+            df: pd.DataFrame = sheet
+            # col G -> idx 6 (0-based), col B -> idx 1, col I -> idx 8
+            # 1) header row where df[6] == HEADER_KEYWORD
+            hdrs = df[df[6] == self.HEADER_KEYWORD].index
+            if hdrs.empty:
+                raise RuntimeError(f"No '{self.HEADER_KEYWORD}' in {self.path.name}")
+            hdr = hdrs[0]
+
+            # 2) read until STOP_TOKEN in column 1
+            for idx in range(hdr + 1, len(df)):
+                if df.at[idx, 1] == self.STOP_TOKEN:
+                    break
+
+                cust = df.at[idx, 8]
+                amt  = df.at[idx, 6]
+
+                if pd.isna(cust) or not str(cust).strip():
+                    break
+
+                if isinstance(amt, str):
+                    amt = float(amt.replace(",", ""))
+
                 rows.append((str(cust).strip(), amt))
 
         print(f"🔍 Loaded {len(rows)} entries from {self.path.name}")

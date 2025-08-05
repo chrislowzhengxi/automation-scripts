@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
-from parsers import CitiParser, CTBCParser, MegaParser, FubonParser, SinopacParser, BankParserBase
+from parsers import CitiParser, CTBCParser, MegaParser, FubonParser, SinopacParser, ESunParser, BankParserBase
 
 PARSER_REGISTRY = {
     "花旗": CitiParser,
@@ -8,6 +8,7 @@ PARSER_REGISTRY = {
     "兆豐": MegaParser,
     "富邦": FubonParser,
     "永豐": SinopacParser,
+    "玉山": ESunParser,
     # …more banks later…
 }
 
@@ -47,7 +48,7 @@ BANK_MAP = {
     "兆豐": "兆豐竹科新安 NTD 2656",
     "富邦": "富邦仁愛 NTD 6332",
     "永豐": "永豐城中 NTD 7978",
-
+    "玉山": "玉山營業 NTD 8563",
     # …add more banks here…
 }
 
@@ -63,34 +64,6 @@ def parse_args():
     p.add_argument("--date", "-d",
                    help="Posting date in YYYYMMDD (defaults to today)")
     return p.parse_args()
-
-
-# def load_bank_entries(bank_path, sheet, desc_col, amt_col, keyword):
-#     wb = openpyxl.load_workbook(bank_path, data_only=True)
-#     ws = wb[sheet]
-
-#     # find all header hits
-#     hits = [r for r in range(1, ws.max_row+1)
-#             if ws[f"{desc_col}{r}"].value == keyword]
-#     if not hits:
-#         raise RuntimeError(f"No '{keyword}' header in {bank_path.name}")
-
-#     # choose second hit if available
-#     hdr = hits[1] if len(hits) > 1 else hits[0]
-#     start = hdr + 2
-
-#     entries = []
-#     r = start
-#     while True:
-#         txt = ws[f"{desc_col}{r}"].value
-#         if txt is None or not str(txt).strip():
-#             break
-#         amt = ws[f"{amt_col}{r}"].value
-#         entries.append((str(txt).strip(), amt))
-#         r += 1
-
-#     print(f"Loaded {len(entries)} entries from {bank_path.name}")
-#     return entries
 
 def detect_bank(stem, bank_map):
     for key, display in bank_map.items():

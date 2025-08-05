@@ -1,3 +1,5 @@
+from rapidfuzz import process, fuzz
+
 # ─────────────── 4) MATCH & DEBUG ───────────────
 def match_entries_debug(entries, db, threshold=80):
     """Return [(raw_text, amount, db_row)] with verbose logs."""
@@ -47,7 +49,6 @@ def match_entries_interactive(entries, db, threshold=80):
     entries: list of (raw_txt, amt)
     db: DataFrame with columns E (keyword), F (cust_id), G (clean_name)
     """
-    from rapidfuzz import process, fuzz
 
     keywords = db["E"].astype(str).str.strip().tolist()
     matches = []

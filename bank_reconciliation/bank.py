@@ -2,6 +2,7 @@
 from pathlib import Path
 from parsers import CitiParser, CTBCParser, MegaParser, FubonParser, SinopacParser, ESunParser, BankParserBase
 from fuzzy_matcher import match_entries_interactive, match_entries_debug
+from utils import log_skipped
 
 PARSER_REGISTRY = {
     "花旗": CitiParser,
@@ -201,7 +202,7 @@ def main():
     matches, skipped = match_entries_interactive(entries, db, FUZZY_THRESHOLD)
     if skipped:
         log_skipped(skipped, filepath="skipped.csv")
-        
+
     print(f"DEBUG  → matches found: {len(matches)}")
     
     # 5) (next: write out your two‐row blocks into the output template)

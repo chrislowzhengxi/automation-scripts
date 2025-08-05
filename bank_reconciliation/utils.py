@@ -2,6 +2,21 @@ import openpyxl
 import pandas as pd
 from pathlib import Path
 from typing import Union
+import csv
+
+
+def log_skipped(skipped, filepath="skipped.csv"):
+    """
+    Log skipped entries to a CSV file for review.
+
+    skipped: list of (raw_txt, amt)
+    filepath: output CSV filename
+    """
+    with open(filepath, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["raw_text", "amount"])
+        writer.writerows(skipped)
+    print(f"📝 Skipped entries written to {filepath}")
 
 def load_sheet(path: Union[str, Path],
                sheet: Union[int, str] = 0,

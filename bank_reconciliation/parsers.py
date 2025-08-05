@@ -1,7 +1,9 @@
 import openpyxl
 from pathlib import Path
 import pandas as pd
-from utils import load_sheet
+from typing import Union
+
+
 
 class BankParserBase:
     def __init__(self, path):        # path = pathlib.Path
@@ -84,4 +86,52 @@ class CTBCParser(BankParserBase):
             rows.append((cust.strip(), amt))
 
         print(f"Loaded {len(rows)} entries from {self.path.name}")
+        return rows
+
+
+class MegaParser(BankParserBase):
+    """
+    Parses 1000-兆豐-*.xlsx
+    - Header row has '存入金額' in column F
+    - Customer name sits under '備註' in column H
+    - Stop reading once column D contains '總計'
+    """
+    SHEET_NAME     = None        # single‐sheet workbooks
+    AMOUNT_COL     = "F"
+    CUSTOMER_COL   = "H"
+    STOP_COL       = "D"
+    HEADER_KEYWORD = "存入金額"
+    STOP_TOKEN     = "總計"
+
+    def extract_rows(self):
+        wb = openpyxl.load_workbook(self.path, data_only=True)
+        ws = wb.active
+
+        # 1) find header row in column F
+        hdr = None
+        for r in range(1, ws.max_row + 1):
+            if ws[f"{self.AMOUNT_COL}{r}"].value == self.HEADER_KEYWORD:
+                hdr = r
+                break
+        if hdr is None:
+            raise RuntimeError(f"No '{self.HEADER_KEYWORD}' in {self.path.name}")
+
+        # 2) read data until we hit '總計' in column D
+        rows = []
+        r = hdr + 1
+        while r <= ws.max_row:
+            # if this row is the grand‐total/subtotal row, stop completely
+            if ws[f"{self.STOP_COL}{r}"].value == self.STOP_TOKEN:
+                break
+
+            cust = ws[f"{self.CUSTOMER_COL}{r}"].value
+            amt  = ws[f"{self.AMOUNT_COL}{r}"].value
+
+            # if customer cell is empty (unlikely for this bank), also stop
+            if cust is None or not str(cust).strip():
+                break
+
+            rows.append((str(cust).strip(), amt))
+            r += 1
+
         return rows

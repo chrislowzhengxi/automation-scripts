@@ -1,7 +1,7 @@
 import openpyxl
 from pathlib import Path
 import pandas as pd
-
+from utils import load_sheet
 
 class BankParserBase:
     def __init__(self, path):        # path = pathlib.Path
@@ -19,8 +19,9 @@ class CitiParser(BankParserBase):    # your existing logic
     HEADER_KEYWORD = "細節描述"
 
     def extract_rows(self):
-        wb = openpyxl.load_workbook(self.path, data_only=True)
-        ws = wb[self.SHEET_NAME]
+        # wb = openpyxl.load_workbook(self.path, data_only=True)
+        # ws = wb[self.SHEET_NAME]
+        ws = load_sheet(self.path, sheet=self.SHEET_NAME)
 
         # 1) find header row(s)
         hits = [
@@ -55,13 +56,14 @@ class CTBCParser(BankParserBase):
 
     def extract_rows(self):
         # 1) read entire sheet into a DataFrame (no header row)
-        df = pd.read_excel(
-            self.path,
-            sheet_name=0,
-            header=None,
-            engine="xlrd",
-            dtype=str   # read everything as strings to preserve formatting
-        )
+        # df = pd.read_excel(
+        #     self.path,
+        #     sheet_name=0,
+        #     header=None,
+        #     engine="xlrd",
+        #     dtype=str   # read everything as strings to preserve formatting
+        # )
+        df = load_sheet(self.path, sheet=0, header=None)
 
         # 2) locate your header row by scanning column J
         #    column J → DataFrame column index 9 (0-based)

@@ -3,7 +3,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from pathlib import Path
 # adjust import if your path differs
-from fill_2_2 import run_mrs0014, run_rptis10
+from ytm_forms.scripts.fill import run_mrs0014, run_rptis10
 
 def browse_template():
     path = filedialog.askopenfilename(
@@ -48,7 +48,7 @@ period_var = tk.StringVar()
 template_var = tk.StringVar()
 
 tk.Label(root, text="Task:").grid(row=0, column=0, sticky="e", padx=8, pady=8)
-tk.OptionMenu(root, task_var, "MRS0014", "RPTIS10", "Both").grid(row=0, column=1, sticky="w", padx=8)
+tk.OptionMenu(root, task_var, "2-2: MRS0014", "2-2: RPTIS10", "2-2: Both").grid(row=0, column=1, sticky="w", padx=8)
 
 tk.Label(root, text="Period (YYYYMM):").grid(row=1, column=0, sticky="e", padx=8, pady=8)
 tk.Entry(root, textvariable=period_var, width=20).grid(row=1, column=1, sticky="w", padx=8)

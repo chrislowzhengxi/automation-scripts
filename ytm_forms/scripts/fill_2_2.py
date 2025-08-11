@@ -326,7 +326,7 @@ def run_rptis10(template_path: Path, period: str, rpt_path: str | None, out_path
 # ---------- CLI ----------
 def main():
     ap = argparse.ArgumentParser(description="Fill YTM forms")
-    ap.add_argument("--task", required=True, choices=["mrs0014", "rptis10"])
+    ap.add_argument("--task", required=True, choices=["mrs0014", "rptis10", "both"])
     ap.add_argument("--period", required=True, help="e.g., 202504")
     ap.add_argument("--template", required=True, help="Path to the template workbook to fill")
     ap.add_argument("--out", help="Output path (.xlsx). Omit and use --inplace to overwrite template")
@@ -344,7 +344,10 @@ def main():
 
     if args.task == "mrs0014":
         run_mrs0014(template_path, args.period, args.mrs, out_path)
-    else:
+    elif args.task == "rptis10":
+        run_rptis10(template_path, args.period, args.rptis, out_path, src_sheet=args.rpt_source_sheet)
+    else:  # both
+        run_mrs0014(template_path, args.period, args.mrs, out_path)
         run_rptis10(template_path, args.period, args.rptis, out_path, src_sheet=args.rpt_source_sheet)
 
     print(f"Done → {out_path}")

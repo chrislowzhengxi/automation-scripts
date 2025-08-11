@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import shutil
 from pathlib import Path
 from parsers import CitiParser, CTBCParser, MegaParser, FubonParser, SinopacParser, ESunParser, BankParserBase
 from fuzzy_matcher import match_entries_interactive, match_entries_debug
@@ -37,8 +38,14 @@ BANK_SHEET      = "Sheet2"
 DB_FILE         = BASE_DIR / "會計憑證導入模板 - 1000 客戶資料庫.xls"
 DB_SHEET        = "客戶資料庫"
 FUZZY_THRESHOLD = 80
-OUTPUT_FILE = BASE_DIR / "會計憑證導入模板 - 空白檔案.xlsx"
+# OUTPUT_FILE = BASE_DIR / "會計憑證導入模板 - 空白檔案.xlsx"
 RED_FONT    = Font(color="FF0000")
+
+
+TEMPLATE_FILE = BASE_DIR / "會計憑證導入模板 - 空白檔案.xlsx"
+def daily_output_path(post_date: str) -> Path:
+    # post_date like "20250715"
+    return BASE_DIR / f"會計憑證導入模板 - {post_date}.xlsx"
 
 COL_DESC = "E"
 COL_AMT  = "G"
@@ -173,9 +180,9 @@ def load_and_filter_db(db_path, sheet, bank_display):
 #     wb.save(template_path)
 #     print(f"✅ Wrote {len(matches)*2} rows into {template_path.name}")
 
-def write_output(matches, template_path, post_date):
+def write_output(matches, out_path, post_date):
     """post_date = 'YYYYMMDD' string supplied by --date"""
-    wb = openpyxl.load_workbook(template_path)
+    wb = openpyxl.load_workbook(out_path)
     ws = wb["Sheet1"]  # adjust if needed
 
     # 0) Build a set of existing DZ-row keys to prevent duplicates:
@@ -193,14 +200,26 @@ def write_output(matches, template_path, post_date):
             s_float = 0.0
         existing.add((str(e_val), str(u_val), s_float))
 
-    # 1) Find the first completely empty row in column A, beginning at row 5
-    row = None
-    for r in range(5, ws.max_row + 2):
-        if ws.cell(r, 1).value is None:
-            row = r
-            break
-    if row is None:
-        row = ws.max_row + 1
+    # # 1) Find the first completely empty row in column A, beginning at row 5
+    # row = None
+    # for r in range(5, ws.max_row + 2):
+    #     if ws.cell(r, 1).value is None:
+    #         row = r
+    #         break
+    # if row is None:
+    #     row = ws.max_row + 1
+
+    # --- helper: is the start row of a 2-row block empty? ---
+    def row_is_empty(r: int) -> bool:
+        # Key columns used in a DZ row (1-based): B,C,D,E,F,G,I,J,O,S,U,V
+        key_cols = [2,3,4,5,6,7,9,10,15,19,21,22]
+        return all(ws.cell(r, c).value is None for c in key_cols)
+
+    # 1) Find where to append (walk in 2-row blocks from row 5)
+    row = 5
+    while row <= ws.max_row + 1 and not row_is_empty(row):
+        row += 2
+
 
     # 2) date helpers
     ymd    = post_date
@@ -267,8 +286,8 @@ def write_output(matches, template_path, post_date):
 
     # 4) Optional: style touch-ups just for the block we wrote are already done via fill()
 
-    wb.save(template_path)
-    print(f"✅ Appended {written} rows into {template_path.name}")
+    wb.save(out_path)
+    print(f"✅ Wrote {len(matches)*2} rows into {out_path.name}")
 
 
 def main():
@@ -300,9 +319,12 @@ def main():
         log_skipped(skipped, filepath="skipped.csv")
 
     print(f"DEBUG  → matches found: {len(matches)}")
-    
+
+    out_path = daily_output_path(post_date)
+    if not out_path.exists():
+        shutil.copy(TEMPLATE_FILE, out_path)  # first bank of the day creates the file 
     # 5) (next: write out your two‐row blocks into the output template)
-    write_output(matches, OUTPUT_FILE, post_date)
+    write_output(matches, out_path, post_date)
 
 if __name__ == "__main__":
     main()

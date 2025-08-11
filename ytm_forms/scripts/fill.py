@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-import argparse, os, re
+import argparse, os, re, shutil
 from pathlib import Path
 from openpyxl import load_workbook
 from openpyxl.cell.cell import MergedCell
 from copy import copy
+
+src = Path(r"C:\Users\TP2507088\Downloads\202504YTM WITS-C 上櫃公司與關係人間重要交易資訊.xlsx")
+dst = src.with_name(f"Copy {src.name}")
+
+shutil.copy(src, dst)
+print(f"Copied to: {dst}")
 
 TARGET_SHEET = "2-2.銷貨倍力"
 COLUMN_A = 1
@@ -65,6 +71,19 @@ def dest_anchor(ws, r, c):
         if rng.min_row <= r <= rng.max_row and rng.min_col <= c <= rng.max_col:
             return rng.min_row, rng.min_col
     return r, c
+
+def default_export_path(explicit: str | None) -> Path:
+    if explicit:
+        p = Path(explicit)
+        if not p.exists():
+            raise FileNotFoundError(f"export.xlsx not found: {p}")
+        return p
+    d = find_downloads()
+    p = d / "export.xlsx"
+    if not p.exists():
+        raise FileNotFoundError(f"export.xlsx not found at {p}")
+    return p
+
 
 # ---------- task: MRS0014 → 2-2 ----------
 def run_mrs0014(template_path: Path, period: str, mrs_path: str | None, out_path: Path):
@@ -148,65 +167,127 @@ def run_rptis10(template_path: Path, period: str, rpt_path: str | None, out_path
 
 
 # ------- 4.3 -----------
-def default_export_path(explicit: str | None) -> Path:
-    if explicit:
-        p = Path(explicit)
-        if not p.exists():
-            raise FileNotFoundError(f"export.xlsx not found: {p}")
-        return p
-    d = find_downloads()
-    p = d / "export.xlsx"
-    if not p.exists():
-        raise FileNotFoundError(f"export.xlsx not found at {p}")
-    return p
+# def find_reserved_header_row(ws, header_keywords=("公司代碼", "年度/月分")):
+#     for r in range(1, ws.max_row + 1):
+#         row_vals = [str(ws.cell(row=r, column=c).value or "") for c in range(1, ws.max_column + 1)]
+#         if any(keyword in cell for cell in row_vals for keyword in header_keywords):
+#             return r
+#     return None
+def find_header_rows(ws, header_keywords=("公司代碼", "年度/月分"), min_row=5):
+    """Return a sorted list of row numbers that look like the 4-3 header."""
+    rows = []
+    for r in range(min_row, ws.max_row + 1):
+        row_vals = [str(ws.cell(row=r, column=c).value or "") for c in range(1, ws.max_column + 1)]
+        if any((kw in cell) for cell in row_vals for kw in header_keywords):
+            rows.append(r)
+    return rows
+
+
 
 def run_export_paste(template_path: Path,
                      export_path: Path,
                      out_path: Path,
                      dest_sheet: str,
                      src_sheet: str | None = None,
-                     src_cols=("B","W"),   # copy B..W
-                     dst_cols=("A","V"),   # paste to A..V
-                     start_row=2):         # assume headers in row 1
-    # open export
+                     src_cols=("B","W"),
+                     dst_cols=("A","V"),
+                     start_row=2,
+                     dst_start_row=10,
+                     buffer_rows=23):
     src_wb = load_workbook(export_path, data_only=True)
     try:
         ws_src = src_wb[src_sheet] if (src_sheet and src_sheet in src_wb.sheetnames) else src_wb.active
+        c1 = ws_src[src_cols[0]+"1"].column
+        c2 = ws_src[src_cols[1]+"1"].column
 
-        # translate col letters to indexes
-        c1 = ws_src[src_cols[0]+"1"].column  # B
-        c2 = ws_src[src_cols[1]+"1"].column  # W
-
-        # find last non-empty row in B..W
-        max_r = ws_src.max_row
-        last = start_row - 1
-        for r in range(start_row, max_r + 1):
+        # find last non-empty row in export.xlsx
+        last_src_row = start_row - 1
+        for r in range(start_row, ws_src.max_row + 1):
             if any(ws_src.cell(row=r, column=c).value is not None for c in range(c1, c2+1)):
-                last = r
-        if last < start_row:
+                last_src_row = r
+        if last_src_row < start_row:
             raise ValueError("No data rows found in export.xlsx (B..W)")
 
-        # open template
         dst_wb = load_workbook(template_path)
         try:
             ws_dst = dst_wb[dest_sheet] if dest_sheet in dst_wb.sheetnames else dst_wb.active
-            dst_c1 = ws_dst[dst_cols[0]+"1"].column  # A
 
-            # source M(13) & O(15) → will land in L & N after shift-left by 1
-            for r in range(start_row, last+1):
+            # detect header row dynamically
+            # reserved_header_row = find_reserved_header_row(ws_dst)
+            # if reserved_header_row is None:
+            #     raise ValueError("Could not find reserved header row in destination sheet.")
+
+            # allowed_last_row = reserved_header_row - buffer_rows - 1
+            # max_rows_allowed = allowed_last_row - dst_start_row + 1
+            # rows_to_write = last_src_row - start_row + 1
+
+            # if rows_to_write > max_rows_allowed:
+            #     raise ValueError(
+            #         f"Too many rows ({rows_to_write}) to paste. "
+            #         f"Only {max_rows_allowed} fit between row {dst_start_row} "
+            #         f"and reserved header row {reserved_header_row} with buffer {buffer_rows}."
+            # #     )
+            # reserved_header_row = find_reserved_header_row(ws_dst, min_row=50)
+
+            # if reserved_header_row is not None:
+            #     allowed_last_row = reserved_header_row - buffer_rows - 1
+            #     max_rows_allowed = allowed_last_row - dst_start_row + 1
+            #     rows_to_write = last_src_row - start_row + 1
+
+            #     if max_rows_allowed < 0:
+            #         raise ValueError(
+            #             f"Reserved header detected too close to start (header at row {reserved_header_row}, "
+            #             f"buffer {buffer_rows}). Increase dst_start_row or reduce buffer."
+            #         )
+
+            #     if rows_to_write > max_rows_allowed:
+            #         raise ValueError(
+            #             f"Too many rows ({rows_to_write}) to paste. Only {max_rows_allowed} fit between "
+            #             f"row {dst_start_row} and reserved header row {reserved_header_row} with buffer {buffer_rows}."
+            #         )
+            # detect top and reserved header rows
+            header_rows = find_header_rows(ws_dst, min_row=5)
+
+            if not header_rows:
+                # no header detected: keep your current dst_start_row and skip reserve check
+                top_header = None
+                reserved_header_row = None
+            else:
+                top_header = header_rows[0]            # e.g., 9
+                reserved_header_row = header_rows[1] if len(header_rows) >= 2 else (top_header + 23)  # e.g., 32
+                # force paste to start below the top header
+                dst_start_row = max(dst_start_row, top_header + 1)
+
+            # capacity check only if we have a reserved header
+            if reserved_header_row is not None:
+                allowed_last_row = reserved_header_row - buffer_rows - 1  # keep 23 blank rows
+                max_rows_allowed = allowed_last_row - dst_start_row + 1
+                rows_to_write = last_src_row - start_row + 1
+
+                if max_rows_allowed < 0:
+                    raise ValueError(
+                        f"Reserved header at row {reserved_header_row} too close to start "
+                        f"(dst_start_row={dst_start_row}, buffer={buffer_rows})."
+                    )
+                if rows_to_write > max_rows_allowed:
+                    raise ValueError(
+                        f"Too many rows ({rows_to_write}) to paste. Only {max_rows_allowed} fit between "
+                        f"row {dst_start_row} and reserved header row {reserved_header_row} with buffer {buffer_rows}."
+                    )
+
+
+            dst_c1 = ws_dst[dst_cols[0]+"1"].column
+            for r in range(start_row, last_src_row + 1):
+                dst_row = dst_start_row + (r - start_row)
                 for src_c in range(c1, c2+1):
                     val = ws_src.cell(row=r, column=src_c).value
-                    dst_c = dst_c1 + (src_c - c1)  # align B..W → A..V
-                    cell = ws_dst.cell(row=r, column=dst_c)
+                    dst_c = dst_c1 + (src_c - c1)
+                    cell = ws_dst.cell(row=dst_row, column=dst_c)
                     cell.value = val
 
-                    # apply thousands separators for M/O only
-                    if src_c in (13, 15):  # M or O in export.xlsx
-                        if isinstance(val, (int, float)):
-                            if isinstance(val, float) and abs(val - int(val)) > 1e-9:
-                                cell.number_format = '#,##0.00'
-                            else:
-                                cell.number_format = '#,##0'
+                    if src_c in (13, 15) and isinstance(val, (int, float)):
+                        cell.number_format = '#,##0.00' if isinstance(val, float) and abs(val - int(val)) > 1e-9 else '#,##0'
+
             out_path.parent.mkdir(parents=True, exist_ok=True)
             dst_wb.save(out_path)
         finally:
@@ -215,32 +296,49 @@ def run_export_paste(template_path: Path,
         src_wb.close()
 
 
+
 # ---------- CLI ----------
 def main():
     ap = argparse.ArgumentParser(description="Fill YTM forms")
-    ap.add_argument("--task", required=True, choices=["mrs0014", "rptis10", "both"])
+    ap.add_argument("--task", required=True,
+                    choices=["mrs0014", "rptis10", "both", "export_4_3"])
     ap.add_argument("--period", required=True, help="e.g., 202504")
     ap.add_argument("--template", required=True, help="Path to the template workbook to fill")
     ap.add_argument("--out", help="Output path (.xlsx). Omit and use --inplace to overwrite template")
+    ap.add_argument("--dest-start-row", type=int, default=10,
+                help="First row to paste into on destination sheet (export_4_3)")
     ap.add_argument("--inplace", action="store_true", help="Overwrite the template file")
+
+    # 2-2 options
     ap.add_argument("--mrs", help="Explicit path to MRS0014 (optional)")
     ap.add_argument("--rptis", help="Explicit path to RPTIS10 (optional)")
     ap.add_argument("--rpt-source-sheet", help="RPTIS10 source sheet name (optional)")
+
+    # 4-3 options
+    ap.add_argument("--export", help="Path to export.xlsx (optional; defaults to Downloads/export.xlsx)")
+    ap.add_argument("--dest-sheet", default="4-3", help="Destination sheet name for the export paste")
+
     args = ap.parse_args()
 
     template_path = Path(args.template)
     if not template_path.exists():
         raise FileNotFoundError(f"Template not found: {template_path}")
 
-    out_path = Path(args.out) if args.out else (template_path if args.inplace else Path(f"ytm_forms/data/output/{args.task}_{args.period}.xlsx"))
+    out_path = Path(args.out) if args.out else (
+        template_path if args.inplace else Path(f"ytm_forms/data/output/{args.task}_{args.period}.xlsx")
+    )
 
     if args.task == "mrs0014":
         run_mrs0014(template_path, args.period, args.mrs, out_path)
     elif args.task == "rptis10":
         run_rptis10(template_path, args.period, args.rptis, out_path, src_sheet=args.rpt_source_sheet)
-    else:  # both
+    elif args.task == "both":
         run_mrs0014(template_path, args.period, args.mrs, out_path)
         run_rptis10(template_path, args.period, args.rptis, out_path, src_sheet=args.rpt_source_sheet)
+    else:  # export_4_3
+        exp_path = default_export_path(args.export)
+        run_export_paste(template_path, exp_path, out_path,
+                        dest_sheet=args.dest_sheet, dst_start_row=args.dest_start_row)
 
     print(f"Done → {out_path}")
 

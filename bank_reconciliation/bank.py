@@ -196,7 +196,7 @@ def write_output(matches, out_path: Path, post_date: str):
         written += 2
 
     wb.save(out_path)
-    print(f"✅ Wrote {written} rows into {out_path.name}")
+    print(f"Wrote {written} rows into {out_path.name}")
 
 def main():
     args      = parse_args()
@@ -205,13 +205,13 @@ def main():
     bank_path = Path(args.file).expanduser()
     parser    = make_parser(bank_path)
     entries   = parser.extract_rows()
-    print(f"🔍 Loaded {len(entries)} entries from {bank_path.name}")
+    print(f"Loaded {len(entries)} entries from {bank_path.name}")
 
 
     # # 1) pick the right parser & extract
     # parser  = make_parser(BANK_FILE)
     # entries = parser.extract_rows()
-    # print(f"🔍 Loaded {len(entries)} entries from {BANK_FILE.name}")
+    # print(f"Loaded {len(entries)} entries from {BANK_FILE.name}")
 
     # # 2) Detect which bank we’re processing
     # stem = Path(BANK_FILE).stem

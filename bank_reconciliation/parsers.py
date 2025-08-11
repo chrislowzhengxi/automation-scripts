@@ -86,7 +86,7 @@ class CitiParser(BankParserBase):
                 amt = _to_float(df.at[idx, 6])
                 rows.append((str(cust).strip(), amt))
 
-        print(f"🔍 Loaded {len(rows)} entries from {self.path.name}")
+        print(f"Loaded {len(rows)} entries from {self.path.name}")
         return rows
 
 
@@ -153,7 +153,7 @@ class CTBCParser(BankParserBase):
                 amt = _to_float(df.at[idx, 4])
                 rows.append((str(cust).strip(), amt))
 
-        print(f"🔍 Loaded {len(rows)} entries from {self.path.name}")
+        print(f"Loaded {len(rows)} entries from {self.path.name}")
         return rows
 
 
@@ -300,29 +300,22 @@ class FubonParser(BankParserBase):
                 if ws[f"A{r}"].value == self.STOP_TOKEN:
                     break
 
-                # raw = ws[f"{self.AMOUNT_COL}{r}"].value
-                # cust = ws[f"{self.CUSTOMER_COL}{r}"].value
+                # read cells
+                raw_deposit = ws[f"{self.AMOUNT_COL}{r}"].value   # F: 存入金額
+                raw_expense = ws[f"E{r}"].value                   # E: 支出金額
+                cust        = ws[f"{self.CUSTOMER_COL}{r}"].value # I: 附言
 
-                # if cust is None or not str(cust).strip():
-                #     break
-
-                # # normalize amount
-                # if isinstance(raw, str):
-                #     raw = raw.replace(",", "").strip() or "0"
-                #     amt = float(raw)
-                # else:
-                #     amt = raw
-
-                # rows.append((str(cust).strip(), amt))
-                # r += 1
-                # skip blanks in附言 instead of stopping the whole loop
+                # skip blank 附言 (but keep scanning)
                 if cust is None or not str(cust).strip():
                     r += 1
                     continue
 
-                amt = _to_float(raw)
+                # skip if it’s an expense row or no deposit
+                if _to_float(raw_expense) not in (None, 0):
+                    r += 1
+                    continue
 
-                # must have a positive/non-zero deposit in F
+                amt = _to_float(raw_deposit)
                 if amt is None or amt == 0:
                     r += 1
                     continue
@@ -367,7 +360,7 @@ class FubonParser(BankParserBase):
                 rows.append((str(cust).strip(), amt))
 
 
-        print(f"🔍 Loaded {len(rows)} entries from {self.path.name}")
+        print(f"Loaded {len(rows)} entries from {self.path.name}")
         return rows
     
 
@@ -436,7 +429,7 @@ class SinopacParser(BankParserBase):
                     amt = float(amt.replace(",", ""))
                 rows.append((str(cust).strip(), amt))
 
-        print(f"🔍 Loaded {len(rows)} entries from {self.path.name}")
+        print(f"Loaded {len(rows)} entries from {self.path.name}")
         return rows
 
 
@@ -516,5 +509,5 @@ class ESunParser(BankParserBase):
 
                 rows.append((str(cust).strip(), amt))
 
-        print(f"🔍 Loaded {len(rows)} entries from {self.path.name}")
+        print(f"Loaded {len(rows)} entries from {self.path.name}")
         return rows

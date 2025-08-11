@@ -1,4 +1,15 @@
 from rapidfuzz import process, fuzz
+import sys
+
+def _prompt_yes_no(question: str) -> str:
+    # GUI watches for [[PROMPT:YN]] lines
+    print(f"[[PROMPT:YN]] {question}", flush=True)
+    return input().strip().lower()
+
+def _prompt_text(question: str) -> str:
+    # GUI watches for [[PROMPT:TEXT]] lines
+    print(f"[[PROMPT:TEXT]] {question}", flush=True)
+    return input().strip()
 
 # ─────────────── 4) MATCH & DEBUG ───────────────
 def match_entries_debug(entries, db, threshold=80):
@@ -7,7 +18,7 @@ def match_entries_debug(entries, db, threshold=80):
     matches  = []
 
     for raw_txt, amt in entries:
-        print("\n🔎 BANK ROW")
+        print("\nBANK ROW")
         print(f"   Text   : {raw_txt!r}")
         print(f"   Amount : {amt}")
 
@@ -16,7 +27,7 @@ def match_entries_debug(entries, db, threshold=80):
         subset  = db[db["E"].apply(lambda k: str(k).replace(' ', '') in clean)]
         if not subset.empty:
             hit = subset.iloc[0]
-            print("   ✅ Exact match:")
+            print("   Exact match:")
             print(f"      Keyword     : {hit['E']!r}")
             print(f"      Customer ID : {hit['F']}  Clean Name : {hit['G']!r}")
             matches.append((raw_txt, amt, hit))
@@ -28,17 +39,17 @@ def match_entries_debug(entries, db, threshold=80):
         )
         if best:
             best_kw, score, _ = best
-            print(f"   ➡️  Fuzzy best : {best_kw!r}  (score {score:.1f})")
+            print(f"   Fuzzy best : {best_kw!r}  (score {score:.1f})")
             if score >= threshold:
                 idx = keywords.index(best_kw)
                 hit = db.iloc[idx]
-                print("   ✅ Accepted fuzzy match")
+                print("   Accepted fuzzy match")
                 matches.append((raw_txt, amt, hit))
                 continue
             else:
-                print(f"   ⚠️  Score {score:.1f} < threshold {threshold}")
+                print(f"   Score {score:.1f} < threshold {threshold}")
         else:
-            print("   ⚠️  No fuzzy candidate at all")
+            print("    No fuzzy candidate at all")
 
     print(f"\n🔗 Matched {len(matches)}/{len(entries)} rows")
     return matches
@@ -58,7 +69,7 @@ def match_entries_interactive(entries, db, threshold=80):
     entries = [(txt, amt) for txt, amt in entries if amt and float(amt) != 0]
 
     for raw_txt, amt in entries:
-        print("\n🔎 ROW:")
+        print("\nROW:")
         print(f"  desc  = {raw_txt!r}")
         print(f"  amount= {amt}")
 
@@ -67,7 +78,7 @@ def match_entries_interactive(entries, db, threshold=80):
         subset = db[ db["E"].apply(lambda k: key_clean.find(str(k).replace(" ","")) >= 0) ]
         if not subset.empty:
             hit = subset.iloc[0]
-            print("  ✅ Exact match:")
+            print("  Exact match:")
             print(f"     → {hit['E']!r}  [{hit['F']}] {hit['G']}")
             matches.append((raw_txt, amt, hit))
             continue
@@ -76,17 +87,19 @@ def match_entries_interactive(entries, db, threshold=80):
         best, score, _ = process.extractOne(
             key_clean, keywords, scorer=fuzz.partial_ratio
         )
-        print(f"  ➡️  Best fuzzy: {best!r}  (score {score:.1f})")
+        print(f"  Best fuzzy: {best!r}  (score {score:.1f})")
         idx = keywords.index(best)
         hit = db.iloc[idx]
 
         # 4) ask user
-        ans = input(f"    接受 (y/n) ").strip().lower()
+        # ans = input(f"    接受 (y/n) ").strip().lower()
+        ans = _prompt_yes_no("接受這個配對嗎？(y/n)")
         if ans in ("", "y", "yes"):
             matches.append((raw_txt, amt, hit))
         else:
             # manual override
-            manual = input("    請輸入客戶ID（或留空以跳過）：").strip()
+            # manual = input("    請輸入客戶ID（或留空以跳過）：").strip()
+            manual = _prompt_text("請輸入客戶ID（或留空以跳過）：")
             if manual:
                 # look up manual ID in db
                 row = db[ db["F"].astype(str) == manual ]
@@ -94,11 +107,11 @@ def match_entries_interactive(entries, db, threshold=80):
                     hit2 = row.iloc[0]
                     matches.append((raw_txt, amt, hit2))
                 else:
-                    print(f"    ⚠️  ID {manual!r} not found—skipping.")
+                    print(f"    ID {manual!r} not found—skipping.")
                     skipped.append((raw_txt, amt))
             else:
-                print("    ⚠️  skipped.")
+                print("    skipped.")
                 skipped.append((raw_txt, amt))
 
-    print(f"\n🔗 Done: {len(matches)} matched, {len(skipped)} skipped")
+    print(f"Done: {len(matches)} matched, {len(skipped)} skipped")
     return matches, skipped

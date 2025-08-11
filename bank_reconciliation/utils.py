@@ -16,7 +16,7 @@ def log_skipped(skipped, filepath="skipped.csv"):
         writer = csv.writer(f)
         writer.writerow(["raw_text", "amount"])
         writer.writerows(skipped)
-    print(f"📝 Skipped entries written to {filepath}")
+    print(f"Skipped entries written to {filepath}")
 
 def load_sheet(path: Union[str, Path],
                sheet: Union[int, str] = 0,

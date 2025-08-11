@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+from collections import defaultdict
 import shutil
 from pathlib import Path
 from parsers import CitiParser, CTBCParser, MegaParser, FubonParser, SinopacParser, ESunParser, BankParserBase
@@ -90,40 +90,158 @@ def load_and_filter_db(db_path, sheet, bank_display):
     print(f"Filtered DB to {len(filtered)} rows for '{bank_display}'")
     return filtered
 
-# ─────────────── 5) WRITE OUTPUT ───────────────
-def write_output(matches, out_path, post_date):
-    """post_date = 'YYYYMMDD' string supplied by --date"""
-    wb = openpyxl.load_workbook(out_path)
-    ws = wb["Sheet1"]  # adjust if needed
 
-    # 0) Build a set of existing DZ-row keys to prevent duplicates:
-    # Key = (E=posting_date, U=cust_id, S=amount)
-    existing = set()
-    for r in range(5, ws.max_row + 1, 2):       # every first row of a 2-row block
-        e_val = ws.cell(r, 5).value   # E
-        u_val = ws.cell(r, 21).value  # U
-        s_val = ws.cell(r, 19).value  # S
+# def write_output(matches, out_path: Path, post_date: str):
+#     """
+#     Append matched rows into the per-day workbook, skipping exact duplicates.
+
+#     Duplicate key = (E posting_date, U cust_id, S amount, I text).
+#     """
+#     import openpyxl
+
+#     wb = openpyxl.load_workbook(out_path)
+#     ws = wb["Sheet1"]
+
+#     # ---- collect existing keys from already written DZ rows ----
+#     existing_counts = defaultdict(int)
+#     for r in range(5, ws.max_row + 1, 2):  # first row of each 2-row block
+#         e_val = ws.cell(r, 5).value   # E = posting date
+#         u_val = ws.cell(r, 21).value  # U = customer id
+#         s_val = ws.cell(r, 19).value  # S = amount
+#         if e_val is None and u_val is None and s_val is None:
+#             continue
+#         try:
+#             s_float = float(str(s_val).replace(",", "")) if s_val is not None else 0.0
+#         except ValueError:
+#             s_float = 0.0
+#         key = (str(e_val), str(u_val), s_float)
+#         existing_counts[key] += 1
+
+#     # track how many of each key we see in THIS run
+#     seen_now = defaultdict(int)
+
+
+#     # --- helper: is the start row of a 2-row block empty? ---
+#     def row_is_empty(r: int) -> bool:
+#         # Key columns used in a DZ row (1-based): B,C,D,E,F,G,I,J,O,S,U,V
+#         key_cols = [2,3,4,5,6,7,9,10,15,19,21,22]
+#         return all(ws.cell(r, c).value is None for c in key_cols)
+
+#     # 1) Find where to append (walk in 2-row blocks from row 5)
+#     row = 5
+#     while row <= ws.max_row + 1 and not row_is_empty(row):
+#         row += 2
+
+#     # ---- date helpers ----
+#     ymd    = post_date                 # "20250625"
+#     y_str  = ymd[:4]                   # "2025"
+#     m_str  = ymd[4:6]                  # "06"
+#     md_str = f"{ymd[4:6]}.{ymd[6:]}"   # "06.25"
+
+#     def fill(r, data, red_cols=None):
+#         red_cols = red_cols or []
+#         for col, val in data.items():
+#             cell = ws[f"{col}{r}"]
+#             cell.value = val
+#             if col in red_cols:
+#                 cell.font = RED_FONT
+#             if col == "S":
+#                 cell.number_format = "#,##0.00"
+
+#     written = 0
+#     for raw_txt, amt, db_row in matches:
+#         # normalize amount
+#         try:
+#             amt_float = float(str(amt).replace(",", "")) if amt is not None else 0.0
+#         except ValueError:
+#             amt_float = 0.0
+
+#         cust_id  = db_row["F"]
+#         clean_nm = db_row["G"]
+#         hkont    = db_row["C"]
+#         extra_H  = db_row["H"]
+#         extra_I  = db_row["I"]
+
+#         # # This is the text we actually write into column I/V (same as your current format)
+#         text_I = f"{md_str} {clean_nm} 暫收款"
+
+#         # duplicate key includes the text we will write into I
+#         key = (ymd, str(cust_id), amt_float)
+#         seen_now[key] += 1
+
+#         # Skip until we exceed what's already written
+#         if seen_now[key] <= existing_counts.get(key, 0):
+#             continue
+
+#         # ---- Row 1 (DZ) ----
+#         r1 = {
+#             "B": "1000", "C": y_str, "D": "DZ",
+#             "E": ymd,    "F": ymd,   "G": m_str,
+#             "I": text_I,
+#             "J": "NTD",  "O": hkont, "S": amt_float,
+#             "U": cust_id, "V": text_I,
+#             "AP": extra_H, "AU": extra_I,
+#         }
+#         fill(row, r1, red_cols=["E", "F", "G", "S"])
+
+#         # ---- Row 2 (N=5) ----
+#         r2 = {
+#             "L": cust_id,
+#             "N": "5",
+#             "S": -amt_float,
+#             "U": cust_id,
+#             "V": text_I,
+#         }
+#         fill(row + 1, r2)
+
+#         existing.add(key)
+#         row += 2
+#         written += 2
+
+#     wb.save(out_path)
+#     print(f"✅ Wrote {written} rows into {out_path.name}")
+
+
+def write_output(matches, out_path: Path, post_date: str):
+    """
+    Append matched rows into the per-day workbook, skipping duplicates.
+
+    Duplicate key = (E posting_date, U cust_id, S amount).
+    Uses counts so legit repeats are allowed beyond what's already in the sheet.
+    """
+    import openpyxl
+
+    wb = openpyxl.load_workbook(out_path)
+    ws = wb["Sheet1"]
+
+    # ---- collect existing counts from already written DZ rows ----
+    existing_counts = defaultdict(int)
+    for r in range(5, ws.max_row + 1, 2):  # first row of each 2-row block
+        e_val = ws.cell(r, 5).value   # E = posting date
+        u_val = ws.cell(r, 21).value  # U = customer id
+        s_val = ws.cell(r, 19).value  # S = amount
         if e_val is None and u_val is None and s_val is None:
             continue
         try:
             s_float = float(str(s_val).replace(",", "")) if s_val is not None else 0.0
         except ValueError:
             s_float = 0.0
-        existing.add((str(e_val), str(u_val), s_float))
+        key = (str(e_val), str(u_val), s_float)
+        existing_counts[key] += 1
 
-    # --- helper: is the start row of a 2-row block empty? ---
+    # track how many of each key we see in THIS run
+    seen_now = defaultdict(int)
+
     def row_is_empty(r: int) -> bool:
         # Key columns used in a DZ row (1-based): B,C,D,E,F,G,I,J,O,S,U,V
         key_cols = [2,3,4,5,6,7,9,10,15,19,21,22]
         return all(ws.cell(r, c).value is None for c in key_cols)
 
-    # 1) Find where to append (walk in 2-row blocks from row 5)
+    # find first empty 2-row block starting at row 5
     row = 5
     while row <= ws.max_row + 1 and not row_is_empty(row):
         row += 2
 
-
-    # 2) date helpers
     ymd    = post_date
     y_str  = ymd[:4]
     m_str  = ymd[4:6]
@@ -136,12 +254,11 @@ def write_output(matches, out_path, post_date):
             cell.value = val
             if col in red_cols:
                 cell.font = RED_FONT
-            if col == "S":  # force two decimals on column S
+            if col == "S":
                 cell.number_format = "#,##0.00"
 
     written = 0
     for raw_txt, amt, db_row in matches:
-        # normalize amount for duplicate-checking
         try:
             amt_float = float(str(amt).replace(",", "")) if amt is not None else 0.0
         except ValueError:
@@ -153,18 +270,22 @@ def write_output(matches, out_path, post_date):
         extra_H  = db_row["H"]
         extra_I  = db_row["I"]
 
+        text_I = f"{md_str} {clean_nm} 暫收款"
+
         key = (ymd, str(cust_id), amt_float)
-        if key in existing:
-            # already written earlier today; skip
+        seen_now[key] += 1
+
+        # Skip until we exceed what’s already written earlier today
+        if seen_now[key] <= existing_counts.get(key, 0):
             continue
 
         # Row 1 (DZ)
         r1 = {
             "B": "1000", "C": y_str, "D": "DZ",
             "E": ymd,    "F": ymd,   "G": m_str,
-            "I": f"{md_str} {clean_nm} 暫收款",
+            "I": text_I,
             "J": "NTD",  "O": hkont, "S": amt_float,
-            "U": cust_id, "V": f"{md_str} {clean_nm} 暫收款",
+            "U": cust_id, "V": text_I,
             "AP": extra_H, "AU": extra_I,
         }
         fill(row, r1, red_cols=["E", "F", "G", "S"])
@@ -175,22 +296,15 @@ def write_output(matches, out_path, post_date):
             "N": "5",
             "S": -amt_float,
             "U": cust_id,
-            "V": f"{md_str} {clean_nm} 暫收款",
+            "V": text_I,
         }
         fill(row + 1, r2)
 
-        # mark this key as now existing and advance two rows
-        existing.add(key)
         row += 2
         written += 2
 
-    # 3) Do NOT sort / delete / rewrite — keep prior banks intact
-
-    # 4) Optional: style touch-ups just for the block we wrote are already done via fill()
-
     wb.save(out_path)
-    print(f"✅ Wrote {len(matches)*2} rows into {out_path.name}")
-
+    print(f"✅ Wrote {written} rows into {out_path.name}")
 
 def main():
     args      = parse_args()

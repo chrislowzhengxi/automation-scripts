@@ -91,95 +91,6 @@ def load_and_filter_db(db_path, sheet, bank_display):
     return filtered
 
 # ─────────────── 5) WRITE OUTPUT ───────────────
-# def write_output(matches, template_path, post_date):
-#     """post_date = 'YYYYMMDD' string supplied by --date"""
-#     wb = openpyxl.load_workbook(template_path)
-#     ws = wb["Sheet1"]                 # adjust if the tab is named differently
-
-#     # ── 1) Find the first completely empty row in column A, beginning at row 5
-#     for row in range(5, ws.max_row+2):
-#         if ws.cell(row, 1).value is None:
-#             break
-
-#     # ── 2) date helpers ───────────────────────────────────────────────
-#     ymd    = post_date                         # "20250625"
-#     y_str  = ymd[:4]                           # "2025"
-#     m_str  = ymd[4:6]                          # "06"
-#     md_str = f"{ymd[4:6]}.{ymd[6:]}"           # "06.25"
-
-#     def fill(r, data, red_cols=None):
-#         red_cols = red_cols or []
-#         for col, val in data.items():
-#             cell = ws[f"{col}{r}"]
-#             cell.value = val
-#             if col in red_cols:
-#                 cell.font = RED_FONT
-#             # — force two decimal places on column S —
-#             if col == "S":
-#                 cell.number_format = "#,##0.00"
-
-#     for raw_txt, amt, db_row in matches:
-#         cust_id  = db_row["F"]
-#         clean_nm = db_row["G"]
-#         hkont    = db_row["C"]          # adjust if HKONT is another column
-#         extra_H  = db_row["H"]
-#         extra_I  = db_row["I"]
-
-#         # ── Row 1 (DZ row) ───────────────────────────────────────────
-#         r1 = {
-#             "B": "1000", "C": y_str, "D": "DZ",
-#             "E": ymd,    "F": ymd,   "G": m_str,
-#             "I": f"{md_str} {clean_nm} 暫收款",
-#             "J": "NTD",  "O": hkont, "S": amt,
-#             "U": cust_id, "V": f"{md_str} {clean_nm} 暫收款",
-#             "AP": extra_H, "AU": extra_I,
-#         }
-#         # Row-1: mark E F G red
-#         fill(row, r1, red_cols=["E", "F", "G", "S"])
-
-#         # ── Row 2 (ID / N=5 row) ─────────────────────────────────────
-#         r2 = {
-#             "L": cust_id,
-#             "N": "5",
-#             "S": -amt,
-#             "U": cust_id,
-#             "V": f"{md_str} {clean_nm} 暫收款",
-#         }
-#         fill(row+1, r2)
-
-#         row += 2                     # Jump two rows 
-
-#     # ── 3) sort by HKONT in two-row blocks ───────────────────────────
-#     data = list(ws.iter_rows(min_row=5, values_only=True))
-#     blocks = [data[i:i+2] for i in range(0, len(data), 2)]   # 2 rows + blank
-#     blocks.sort(key=lambda blk: str(blk[0][14] or ""))       # col O index 14
-#     # rewrite
-#     ws.delete_rows(5, ws.max_row)
-#     r = 5
-#     for blk in blocks:
-#         for vals in blk:
-#             for c, v in enumerate(vals, start=1):
-#                 ws.cell(row=r, column=c, value=v)
-#             r += 1
-
-#     # ── 4) re-apply styles to each 2-row customer block ────────────────────
-#     # Columns:  E=5  F=6  G=7   S=19
-#     for rr in range(5, ws.max_row + 1, 2):          # rr = first row of each pair
-#         # 1) paint E/F/G on the first row red
-#         for cc in (5, 6, 7):
-#             ws.cell(rr, cc).font = RED_FONT
-
-#         # 2) format column S on BOTH rows; red-font only on the positive row
-#         for r, make_red in ((rr, True), (rr + 1, False)):
-#             s_cell = ws.cell(r, 19)                 # column S
-#             s_cell.number_format = "#,##0.00"
-#             if make_red:                            # row rr (positive amount)
-#                 s_cell.font = RED_FONT
-
-            
-#     wb.save(template_path)
-#     print(f"✅ Wrote {len(matches)*2} rows into {template_path.name}")
-
 def write_output(matches, out_path, post_date):
     """post_date = 'YYYYMMDD' string supplied by --date"""
     wb = openpyxl.load_workbook(out_path)
@@ -199,15 +110,6 @@ def write_output(matches, out_path, post_date):
         except ValueError:
             s_float = 0.0
         existing.add((str(e_val), str(u_val), s_float))
-
-    # # 1) Find the first completely empty row in column A, beginning at row 5
-    # row = None
-    # for r in range(5, ws.max_row + 2):
-    #     if ws.cell(r, 1).value is None:
-    #         row = r
-    #         break
-    # if row is None:
-    #     row = ws.max_row + 1
 
     # --- helper: is the start row of a 2-row block empty? ---
     def row_is_empty(r: int) -> bool:
@@ -328,6 +230,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # args     = parse_args()
-    # post_date = args.date or datetime.today().strftime("%Y%m%d")
-    # main(post_date)

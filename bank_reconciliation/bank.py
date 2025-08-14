@@ -119,34 +119,7 @@ def enumerate_existing_outputs(post_date: str) -> list[Path]:
                 break
     return files
 
-# def latest_or_new_output_path(post_date: str, force_new_run: bool = False) -> tuple[Path, list[Path]]:
-#     """
-#     If force_new_run=True → always create the next -N file.
-#     Else:
-#       - If only base exists → create -2 and use it (subsequent invocations will keep appending to -2)
-#       - If a -N already exists → reuse the latest -N and append to it
-#     Returns (out_path_to_write, earlier_paths_for_duplicate_check).
-#     earlier_paths includes every existing file for the day (including out_path if it already exists),
-#     so we de-dup against what’s already written even within the current -N file.
-#     """
-#     earlier = enumerate_existing_outputs(post_date)
-#     base = day_output_base(post_date)
 
-#     if not earlier:
-#         # First ever run of the day: write to base
-#         return base, []
-
-#     if force_new_run:
-#         next_idx = len(earlier) + 1
-#         return BASE_DIR / f"會計憑證導入模板 - {post_date}-{next_idx}.xlsx", earlier
-
-#     latest = earlier[-1]
-#     if latest == base:
-#         # Base exists but no versioned file yet → create and use -2
-#         return BASE_DIR / f"會計憑證導入模板 - {post_date}-2.xlsx", earlier  # earlier=[base]
-#     else:
-#         # A versioned file already exists → keep appending to the latest one
-#         return latest, earlier  # earlier includes latest, good for de-dup
 def latest_or_new_output_path(post_date: str, force_new_run: bool = False) -> tuple[Path, list[Path]]:
     """
     Default: append to the latest existing output for this date (base or -N).

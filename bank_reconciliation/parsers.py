@@ -441,7 +441,7 @@ class ESunParser(BankParserBase):
     - Customer name under '備註' in column I
     - Stop reading once column B contains '總計'
     """
-    SHEET_NAME     = "工作表1"
+    SHEET_NAME     = 0
     AMOUNT_COL     = "G"
     CUSTOMER_COL   = "I"
     HEADER_KEYWORD = "存"

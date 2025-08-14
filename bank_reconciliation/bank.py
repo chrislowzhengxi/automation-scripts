@@ -119,34 +119,54 @@ def enumerate_existing_outputs(post_date: str) -> list[Path]:
                 break
     return files
 
+# def latest_or_new_output_path(post_date: str, force_new_run: bool = False) -> tuple[Path, list[Path]]:
+#     """
+#     If force_new_run=True → always create the next -N file.
+#     Else:
+#       - If only base exists → create -2 and use it (subsequent invocations will keep appending to -2)
+#       - If a -N already exists → reuse the latest -N and append to it
+#     Returns (out_path_to_write, earlier_paths_for_duplicate_check).
+#     earlier_paths includes every existing file for the day (including out_path if it already exists),
+#     so we de-dup against what’s already written even within the current -N file.
+#     """
+#     earlier = enumerate_existing_outputs(post_date)
+#     base = day_output_base(post_date)
+
+#     if not earlier:
+#         # First ever run of the day: write to base
+#         return base, []
+
+#     if force_new_run:
+#         next_idx = len(earlier) + 1
+#         return BASE_DIR / f"會計憑證導入模板 - {post_date}-{next_idx}.xlsx", earlier
+
+#     latest = earlier[-1]
+#     if latest == base:
+#         # Base exists but no versioned file yet → create and use -2
+#         return BASE_DIR / f"會計憑證導入模板 - {post_date}-2.xlsx", earlier  # earlier=[base]
+#     else:
+#         # A versioned file already exists → keep appending to the latest one
+#         return latest, earlier  # earlier includes latest, good for de-dup
 def latest_or_new_output_path(post_date: str, force_new_run: bool = False) -> tuple[Path, list[Path]]:
     """
-    If force_new_run=True → always create the next -N file.
-    Else:
-      - If only base exists → create -2 and use it (subsequent invocations will keep appending to -2)
-      - If a -N already exists → reuse the latest -N and append to it
+    Default: append to the latest existing output for this date (base or -N).
+    Only create a new -N file when force_new_run=True.
     Returns (out_path_to_write, earlier_paths_for_duplicate_check).
-    earlier_paths includes every existing file for the day (including out_path if it already exists),
-    so we de-dup against what’s already written even within the current -N file.
     """
     earlier = enumerate_existing_outputs(post_date)
     base = day_output_base(post_date)
 
     if not earlier:
-        # First ever run of the day: write to base
+        # No file yet for this date → create/use base
         return base, []
 
     if force_new_run:
         next_idx = len(earlier) + 1
         return BASE_DIR / f"會計憑證導入模板 - {post_date}-{next_idx}.xlsx", earlier
 
+    # Reuse the latest existing file (append), whether it's base or a -N
     latest = earlier[-1]
-    if latest == base:
-        # Base exists but no versioned file yet → create and use -2
-        return BASE_DIR / f"會計憑證導入模板 - {post_date}-2.xlsx", earlier  # earlier=[base]
-    else:
-        # A versioned file already exists → keep appending to the latest one
-        return latest, earlier  # earlier includes latest, good for de-dup
+    return latest, earlier
 
 
 def collect_existing_counts(paths: list[Path]) -> dict:
@@ -268,6 +288,8 @@ def write_output(matches, out_path: Path, post_date: str, existing_counts: dict)
 
 def main():
     args      = parse_args()
+    print(f"[ARGS] file={args.file} date={args.date or datetime.today().strftime('%Y%m%d')} new_run={args.new_run}")
+
     post_date = args.date or datetime.today().strftime("%Y%m%d")
 
     bank_path = Path(args.file).expanduser()
@@ -290,8 +312,13 @@ def main():
 
     print(f"DEBUG  → matches found: {len(matches)}")
 
-
+    print("[INFO] Checking existing outputs & deciding target file...")
     out_path, earlier_paths = latest_or_new_output_path(post_date, force_new_run=args.new_run)
+    print(f"[INFO] earlier_paths={ [p.name for p in earlier_paths] }")
+    print(f"[MODE] {'NEW RUN' if args.new_run else 'Append to latest'}")
+    print(f"[INFO] chosen out_path={out_path.name} (force_new_run={args.new_run})")
+
+
     preexisted = out_path.exists()  # track if we are appending to an existing -N
 
     existing_counts = collect_existing_counts(earlier_paths)
@@ -302,9 +329,13 @@ def main():
     # If nothing new was written, only delete if we created a brand new file this time
     if written == 0 and not preexisted:
         try:
-            if out_path.exists():
-                out_path.unlink()
-            print("No new entries; not creating a new per-run file.")
+            if args.new_run:
+                # Keep the anchor file so subsequent files in this batch append to -N.
+                print("No new entries; keeping the new per-run file as the batch anchor.")
+            else:
+                if out_path.exists():
+                    out_path.unlink()
+                print("No new entries; not creating a new per-run file.")
         except Exception as e:
             print(f"Note: could not remove empty file {out_path.name}: {e}")
 

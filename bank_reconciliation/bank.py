@@ -72,6 +72,12 @@ def parse_args():
     )
     p.add_argument("--date", "-d",
                    help="Posting date in YYYYMMDD (defaults to today)")
+    
+    p.add_argument(
+        "--new-run",
+        action="store_true",
+        help="Start a new versioned file for this date instead of appending to the latest one."
+    )
     return p.parse_args()
 
 def detect_bank(stem, bank_map):
@@ -91,42 +97,100 @@ def load_and_filter_db(db_path, sheet, bank_display):
     return filtered
 
 
+def day_output_base(post_date: str) -> Path:
+    return BASE_DIR / f"會計憑證導入模板 - {post_date}.xlsx"
 
-
-
-def write_output(matches, out_path: Path, post_date: str):
+def enumerate_existing_outputs(post_date: str) -> list[Path]:
     """
-    Append matched rows into the per-day workbook, skipping duplicates.
+    Returns existing files for the day in order:
+    [base, -2, -3, ...] if they exist.
+    """
+    files = []
+    base = day_output_base(post_date)
+    if base.exists():
+        files.append(base)
+        k = 2
+        while True:
+            p = BASE_DIR / f"會計憑證導入模板 - {post_date}-{k}.xlsx"
+            if p.exists():
+                files.append(p)
+                k += 1
+            else:
+                break
+    return files
 
-    Duplicate key = (E posting_date, U cust_id, S amount).
-    Uses counts so legit repeats are allowed beyond what's already in the sheet.
+def latest_or_new_output_path(post_date: str, force_new_run: bool = False) -> tuple[Path, list[Path]]:
+    """
+    If force_new_run=True → always create the next -N file.
+    Else:
+      - If only base exists → create -2 and use it (subsequent invocations will keep appending to -2)
+      - If a -N already exists → reuse the latest -N and append to it
+    Returns (out_path_to_write, earlier_paths_for_duplicate_check).
+    earlier_paths includes every existing file for the day (including out_path if it already exists),
+    so we de-dup against what’s already written even within the current -N file.
+    """
+    earlier = enumerate_existing_outputs(post_date)
+    base = day_output_base(post_date)
+
+    if not earlier:
+        # First ever run of the day: write to base
+        return base, []
+
+    if force_new_run:
+        next_idx = len(earlier) + 1
+        return BASE_DIR / f"會計憑證導入模板 - {post_date}-{next_idx}.xlsx", earlier
+
+    latest = earlier[-1]
+    if latest == base:
+        # Base exists but no versioned file yet → create and use -2
+        return BASE_DIR / f"會計憑證導入模板 - {post_date}-2.xlsx", earlier  # earlier=[base]
+    else:
+        # A versioned file already exists → keep appending to the latest one
+        return latest, earlier  # earlier includes latest, good for de-dup
+
+
+def collect_existing_counts(paths: list[Path]) -> dict:
+    """
+    Aggregate duplicate keys across ALL earlier files of the same day.
+    Key = (E posting_date as str, U cust_id as str, S amount as float)
     """
     import openpyxl
+    counts = defaultdict(int)
+    for p in paths:
+        wb = openpyxl.load_workbook(p, data_only=True)
+        ws = wb["Sheet1"]
+        for r in range(5, ws.max_row + 1, 2):
+            e_val = ws.cell(r, 5).value   # E
+            u_val = ws.cell(r, 21).value  # U
+            s_val = ws.cell(r, 19).value  # S
+            if e_val is None and u_val is None and s_val is None:
+                continue
+            try:
+                s_float = float(str(s_val).replace(",", "")) if s_val is not None else 0.0
+            except ValueError:
+                s_float = 0.0
+            key = (str(e_val), str(u_val), s_float)
+            counts[key] += 1
+    return counts
+
+
+def write_output(matches, out_path: Path, post_date: str, existing_counts: dict) -> int:
+    """
+    Write ONLY new 2-row blocks into a NEW per-run workbook.
+    We compare against aggregated counts from all earlier files (existing_counts).
+    Returns the number of rows written (should be even).
+    """
+    import openpyxl
+
+    # Create the per-run file from template
+    if not out_path.exists():
+        shutil.copy(TEMPLATE_FILE, out_path)
 
     wb = openpyxl.load_workbook(out_path)
     ws = wb["Sheet1"]
 
-    # ---- collect existing counts from already written DZ rows ----
-    existing_counts = defaultdict(int)
-    for r in range(5, ws.max_row + 1, 2):  # first row of each 2-row block
-        e_val = ws.cell(r, 5).value   # E = posting date
-        u_val = ws.cell(r, 21).value  # U = customer id
-        s_val = ws.cell(r, 19).value  # S = amount
-        if e_val is None and u_val is None and s_val is None:
-            continue
-        try:
-            s_float = float(str(s_val).replace(",", "")) if s_val is not None else 0.0
-        except ValueError:
-            s_float = 0.0
-        key = (str(e_val), str(u_val), s_float)
-        existing_counts[key] += 1
-
-    # track how many of each key we see in THIS run
-    seen_now = defaultdict(int)
-
     def row_is_empty(r: int) -> bool:
-        # Key columns used in a DZ row (1-based): B,C,D,E,F,G,I,J,O,S,U,V
-        key_cols = [2,3,4,5,6,7,9,10,15,19,21,22]
+        key_cols = [2,3,4,5,6,7,9,10,15,19,21,22]  # B,C,D,E,F,G,I,J,O,S,U,V
         return all(ws.cell(r, c).value is None for c in key_cols)
 
     # find first empty 2-row block starting at row 5
@@ -149,7 +213,9 @@ def write_output(matches, out_path: Path, post_date: str):
             if col == "S":
                 cell.number_format = "#,##0.00"
 
+    seen_now = defaultdict(int)
     written = 0
+
     for raw_txt, amt, db_row in matches:
         try:
             amt_float = float(str(amt).replace(",", "")) if amt is not None else 0.0
@@ -167,7 +233,7 @@ def write_output(matches, out_path: Path, post_date: str):
         key = (ymd, str(cust_id), amt_float)
         seen_now[key] += 1
 
-        # Skip until we exceed what’s already written earlier today
+        # Skip until we exceed what’s already written in earlier files
         if seen_now[key] <= existing_counts.get(key, 0):
             continue
 
@@ -197,6 +263,8 @@ def write_output(matches, out_path: Path, post_date: str):
 
     wb.save(out_path)
     print(f"Wrote {written} rows into {out_path.name}")
+    return written
+
 
 def main():
     args      = parse_args()
@@ -206,12 +274,6 @@ def main():
     parser    = make_parser(bank_path)
     entries   = parser.extract_rows()
     print(f"Loaded {len(entries)} entries from {bank_path.name}")
-
-
-    # # 1) pick the right parser & extract
-    # parser  = make_parser(BANK_FILE)
-    # entries = parser.extract_rows()
-    # print(f"Loaded {len(entries)} entries from {BANK_FILE.name}")
 
     # # 2) Detect which bank we’re processing
     # stem = Path(BANK_FILE).stem
@@ -228,11 +290,24 @@ def main():
 
     print(f"DEBUG  → matches found: {len(matches)}")
 
-    out_path = daily_output_path(post_date)
-    if not out_path.exists():
-        shutil.copy(TEMPLATE_FILE, out_path)  # first bank of the day creates the file 
-    # 5) (next: write out your two‐row blocks into the output template)
-    write_output(matches, out_path, post_date)
+
+    out_path, earlier_paths = latest_or_new_output_path(post_date, force_new_run=args.new_run)
+    preexisted = out_path.exists()  # track if we are appending to an existing -N
+
+    existing_counts = collect_existing_counts(earlier_paths)
+
+    # Write only new items to this file (append if it already exists)
+    written = write_output(matches, out_path, post_date, existing_counts)
+
+    # If nothing new was written, only delete if we created a brand new file this time
+    if written == 0 and not preexisted:
+        try:
+            if out_path.exists():
+                out_path.unlink()
+            print("No new entries; not creating a new per-run file.")
+        except Exception as e:
+            print(f"Note: could not remove empty file {out_path.name}: {e}")
+
 
 if __name__ == "__main__":
     main()

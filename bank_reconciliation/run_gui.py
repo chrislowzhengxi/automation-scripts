@@ -52,6 +52,14 @@ class BankRunnerGUI:
         tk.Button(top, text="Remove selected", command=self.remove_selected).pack(side=tk.LEFT)
         tk.Button(top, text="Clear", command=self.clear_files).pack(side=tk.LEFT, padx=(6, 0))
 
+        # # New checkbox
+        # self.force_new_run_var = tk.BooleanVar(value=False)
+        # tk.Checkbutton(
+        #     top,
+        #     text="Start new run (-2/-3…) for this batch",
+        #     variable=self.force_new_run_var
+        # ).pack(side=tk.LEFT, padx=(20, 0))
+
         # File list
         mid = tk.Frame(master)
         mid.pack(fill=tk.BOTH, expand=True, padx=10)
@@ -197,10 +205,10 @@ class BankRunnerGUI:
         self.master.after(0, lambda: self.set_status("Done"))
         self.master.after(0, lambda: self.append_log("=== Run finished ===\n"))
 
-
     def _run_single(self, bank_py: str, filepath: str, ymd: str):
         self.master.after(0, lambda: self.append_log(f"\n-- Processing: {os.path.basename(filepath)} --\n"))
         cmd = [sys.executable, bank_py, "-f", filepath, "-d", ymd]
+
         try:
             env = dict(os.environ)
             env["PYTHONIOENCODING"] = "utf-8"

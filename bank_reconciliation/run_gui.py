@@ -53,12 +53,12 @@ class BankRunnerGUI:
         tk.Button(top, text="Clear", command=self.clear_files).pack(side=tk.LEFT, padx=(6, 0))
 
         # # New checkbox
-        # self.force_new_run_var = tk.BooleanVar(value=False)
-        # tk.Checkbutton(
-        #     top,
-        #     text="Start new run (-2/-3…) for this batch",
-        #     variable=self.force_new_run_var
-        # ).pack(side=tk.LEFT, padx=(20, 0))
+        self.new_run_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            top,
+            text="Start new run (-2/-3…) for this batch",
+            variable=self.new_run_var
+        ).pack(side=tk.LEFT, padx=(20, 0))
 
         # File list
         mid = tk.Frame(master)
@@ -186,10 +186,23 @@ class BankRunnerGUI:
             messagebox.showerror("Missing bank.py", f"bank.py not found next to this app:\n{bank_py}")
             return
 
+        # self.set_status("Running…")
+        # self.append_log("\n=== Run started ===\n")
+        # self.master.after(100, lambda: self._toggle_run_buttons(False))
+        # threading.Thread(target=self._run_all, args=(bank_py, files, ymd), daemon=True).start()
         self.set_status("Running…")
         self.append_log("\n=== Run started ===\n")
+
+        # NEW: capture checkbox value and log the mode
+        batch_new_run = bool(self.new_run_var.get())
+        self.append_log(f"[MODE] {'NEW RUN' if batch_new_run else 'Append to latest'} for {ymd}\n")
+
         self.master.after(100, lambda: self._toggle_run_buttons(False))
-        threading.Thread(target=self._run_all, args=(bank_py, files, ymd), daemon=True).start()
+        threading.Thread(
+            target=self._run_all,
+            args=(bank_py, files, ymd, batch_new_run),  # <- pass 4th arg
+            daemon=True
+        ).start()
 
     def _toggle_run_buttons(self, enable: bool):
         for child in self.master.winfo_children():
@@ -198,16 +211,51 @@ class BankRunnerGUI:
                     if isinstance(sub, tk.Button):
                         sub.configure(state=(tk.NORMAL if enable else tk.DISABLED))
 
-    def _run_all(self, bank_py: str, files: list[str], ymd: str):
+    # def _run_all(self, bank_py: str, files: list[str], ymd: str):
+    #     for f in files:
+    #         self._run_single(bank_py, f, ymd)
+    #     self.master.after(0, lambda: self._toggle_run_buttons(True))
+    #     self.master.after(0, lambda: self.set_status("Done"))
+    #     self.master.after(0, lambda: self.append_log("=== Run finished ===\n"))
+    def _run_all(self, bank_py: str, files: list[str], ymd: str, batch_new_run: bool):
+        first = True
         for f in files:
-            self._run_single(bank_py, f, ymd)
+            use_new_run = (first and batch_new_run)
+            self._run_single(bank_py, f, ymd, new_run=use_new_run)
+            first = False
         self.master.after(0, lambda: self._toggle_run_buttons(True))
         self.master.after(0, lambda: self.set_status("Done"))
         self.master.after(0, lambda: self.append_log("=== Run finished ===\n"))
 
-    def _run_single(self, bank_py: str, filepath: str, ymd: str):
+
+    # def _run_single(self, bank_py: str, filepath: str, ymd: str):
+    #     self.master.after(0, lambda: self.append_log(f"\n-- Processing: {os.path.basename(filepath)} --\n"))
+    #     cmd = [sys.executable, bank_py, "-f", filepath, "-d", ymd]
+
+    #     try:
+    #         env = dict(os.environ)
+    #         env["PYTHONIOENCODING"] = "utf-8"
+
+    #         proc = subprocess.Popen(
+    #             cmd,
+    #             stdin=subprocess.PIPE,                 # <— allow sending answers
+    #             stdout=subprocess.PIPE,
+    #             stderr=subprocess.STDOUT,
+    #             text=True,
+    #             encoding="utf-8",
+    #             errors="replace",
+    #             bufsize=1,
+    #             env=env,
+    #         )
+    def _run_single(self, bank_py: str, filepath: str, ymd: str, new_run: bool = False):
         self.master.after(0, lambda: self.append_log(f"\n-- Processing: {os.path.basename(filepath)} --\n"))
         cmd = [sys.executable, bank_py, "-f", filepath, "-d", ymd]
+        if new_run:
+            cmd.append("--new-run")
+            self.master.after(0, lambda: self.append_log("[INFO] Starting NEW RUN for this batch (will write to -N file)\n"))
+
+        # NEW: echo the exact command (great for debugging)
+        self.master.after(0, lambda s=f"[CMD] {' '.join(cmd)}\n": self.append_log(s))
 
         try:
             env = dict(os.environ)
@@ -215,7 +263,7 @@ class BankRunnerGUI:
 
             proc = subprocess.Popen(
                 cmd,
-                stdin=subprocess.PIPE,                 # <— allow sending answers
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -224,7 +272,6 @@ class BankRunnerGUI:
                 bufsize=1,
                 env=env,
             )
-
             for line in proc.stdout:
                 # Handle interactive prompts
                 if line.startswith("[[PROMPT:YN]]"):

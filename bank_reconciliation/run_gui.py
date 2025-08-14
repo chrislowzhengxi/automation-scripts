@@ -186,10 +186,7 @@ class BankRunnerGUI:
             messagebox.showerror("Missing bank.py", f"bank.py not found next to this app:\n{bank_py}")
             return
 
-        # self.set_status("Running…")
-        # self.append_log("\n=== Run started ===\n")
-        # self.master.after(100, lambda: self._toggle_run_buttons(False))
-        # threading.Thread(target=self._run_all, args=(bank_py, files, ymd), daemon=True).start()
+
         self.set_status("Running…")
         self.append_log("\n=== Run started ===\n")
 
@@ -211,12 +208,7 @@ class BankRunnerGUI:
                     if isinstance(sub, tk.Button):
                         sub.configure(state=(tk.NORMAL if enable else tk.DISABLED))
 
-    # def _run_all(self, bank_py: str, files: list[str], ymd: str):
-    #     for f in files:
-    #         self._run_single(bank_py, f, ymd)
-    #     self.master.after(0, lambda: self._toggle_run_buttons(True))
-    #     self.master.after(0, lambda: self.set_status("Done"))
-    #     self.master.after(0, lambda: self.append_log("=== Run finished ===\n"))
+
     def _run_all(self, bank_py: str, files: list[str], ymd: str, batch_new_run: bool):
         first = True
         for f in files:
@@ -228,25 +220,6 @@ class BankRunnerGUI:
         self.master.after(0, lambda: self.append_log("=== Run finished ===\n"))
 
 
-    # def _run_single(self, bank_py: str, filepath: str, ymd: str):
-    #     self.master.after(0, lambda: self.append_log(f"\n-- Processing: {os.path.basename(filepath)} --\n"))
-    #     cmd = [sys.executable, bank_py, "-f", filepath, "-d", ymd]
-
-    #     try:
-    #         env = dict(os.environ)
-    #         env["PYTHONIOENCODING"] = "utf-8"
-
-    #         proc = subprocess.Popen(
-    #             cmd,
-    #             stdin=subprocess.PIPE,                 # <— allow sending answers
-    #             stdout=subprocess.PIPE,
-    #             stderr=subprocess.STDOUT,
-    #             text=True,
-    #             encoding="utf-8",
-    #             errors="replace",
-    #             bufsize=1,
-    #             env=env,
-    #         )
     def _run_single(self, bank_py: str, filepath: str, ymd: str, new_run: bool = False):
         self.master.after(0, lambda: self.append_log(f"\n-- Processing: {os.path.basename(filepath)} --\n"))
         cmd = [sys.executable, bank_py, "-f", filepath, "-d", ymd]

@@ -91,42 +91,83 @@ def load_and_filter_db(db_path, sheet, bank_display):
     return filtered
 
 
+def day_output_base(post_date: str) -> Path:
+    return BASE_DIR / f"會計憑證導入模板 - {post_date}.xlsx"
 
-
-
-def write_output(matches, out_path: Path, post_date: str):
+def enumerate_existing_outputs(post_date: str) -> list[Path]:
     """
-    Append matched rows into the per-day workbook, skipping duplicates.
+    Returns existing files for the day in order:
+    [base, -2, -3, ...] if they exist.
+    """
+    files = []
+    base = day_output_base(post_date)
+    if base.exists():
+        files.append(base)
+        k = 2
+        while True:
+            p = BASE_DIR / f"會計憑證導入模板 - {post_date}-{k}.xlsx"
+            if p.exists():
+                files.append(p)
+                k += 1
+            else:
+                break
+    return files
 
-    Duplicate key = (E posting_date, U cust_id, S amount).
-    Uses counts so legit repeats are allowed beyond what's already in the sheet.
+def next_versioned_output_path(post_date: str) -> tuple[Path, list[Path]]:
+    """
+    Returns (next_path_to_write, earlier_paths_for_duplicate_check)
+    earlier_paths are all existing files for that date, in order.
+    """
+    earlier = enumerate_existing_outputs(post_date)
+    if not earlier:
+        # first run of the day
+        return day_output_base(post_date), []
+    # subsequent run: create -N where N = len(earlier)+1
+    next_idx = len(earlier) + 1
+    return BASE_DIR / f"會計憑證導入模板 - {post_date}-{next_idx}.xlsx", earlier
+
+def collect_existing_counts(paths: list[Path]) -> dict:
+    """
+    Aggregate duplicate keys across ALL earlier files of the same day.
+    Key = (E posting_date as str, U cust_id as str, S amount as float)
     """
     import openpyxl
+    counts = defaultdict(int)
+    for p in paths:
+        wb = openpyxl.load_workbook(p, data_only=True)
+        ws = wb["Sheet1"]
+        for r in range(5, ws.max_row + 1, 2):
+            e_val = ws.cell(r, 5).value   # E
+            u_val = ws.cell(r, 21).value  # U
+            s_val = ws.cell(r, 19).value  # S
+            if e_val is None and u_val is None and s_val is None:
+                continue
+            try:
+                s_float = float(str(s_val).replace(",", "")) if s_val is not None else 0.0
+            except ValueError:
+                s_float = 0.0
+            key = (str(e_val), str(u_val), s_float)
+            counts[key] += 1
+    return counts
+
+
+def write_output(matches, out_path: Path, post_date: str, existing_counts: dict) -> int:
+    """
+    Write ONLY new 2-row blocks into a NEW per-run workbook.
+    We compare against aggregated counts from all earlier files (existing_counts).
+    Returns the number of rows written (should be even).
+    """
+    import openpyxl
+
+    # Create the per-run file from template
+    if not out_path.exists():
+        shutil.copy(TEMPLATE_FILE, out_path)
 
     wb = openpyxl.load_workbook(out_path)
     ws = wb["Sheet1"]
 
-    # ---- collect existing counts from already written DZ rows ----
-    existing_counts = defaultdict(int)
-    for r in range(5, ws.max_row + 1, 2):  # first row of each 2-row block
-        e_val = ws.cell(r, 5).value   # E = posting date
-        u_val = ws.cell(r, 21).value  # U = customer id
-        s_val = ws.cell(r, 19).value  # S = amount
-        if e_val is None and u_val is None and s_val is None:
-            continue
-        try:
-            s_float = float(str(s_val).replace(",", "")) if s_val is not None else 0.0
-        except ValueError:
-            s_float = 0.0
-        key = (str(e_val), str(u_val), s_float)
-        existing_counts[key] += 1
-
-    # track how many of each key we see in THIS run
-    seen_now = defaultdict(int)
-
     def row_is_empty(r: int) -> bool:
-        # Key columns used in a DZ row (1-based): B,C,D,E,F,G,I,J,O,S,U,V
-        key_cols = [2,3,4,5,6,7,9,10,15,19,21,22]
+        key_cols = [2,3,4,5,6,7,9,10,15,19,21,22]  # B,C,D,E,F,G,I,J,O,S,U,V
         return all(ws.cell(r, c).value is None for c in key_cols)
 
     # find first empty 2-row block starting at row 5
@@ -149,7 +190,9 @@ def write_output(matches, out_path: Path, post_date: str):
             if col == "S":
                 cell.number_format = "#,##0.00"
 
+    seen_now = defaultdict(int)
     written = 0
+
     for raw_txt, amt, db_row in matches:
         try:
             amt_float = float(str(amt).replace(",", "")) if amt is not None else 0.0
@@ -167,7 +210,7 @@ def write_output(matches, out_path: Path, post_date: str):
         key = (ymd, str(cust_id), amt_float)
         seen_now[key] += 1
 
-        # Skip until we exceed what’s already written earlier today
+        # Skip until we exceed what’s already written in earlier files
         if seen_now[key] <= existing_counts.get(key, 0):
             continue
 
@@ -197,6 +240,112 @@ def write_output(matches, out_path: Path, post_date: str):
 
     wb.save(out_path)
     print(f"Wrote {written} rows into {out_path.name}")
+    return written
+
+
+# def write_output(matches, out_path: Path, post_date: str):
+#     """
+#     Append matched rows into the per-day workbook, skipping duplicates.
+
+#     Duplicate key = (E posting_date, U cust_id, S amount).
+#     Uses counts so legit repeats are allowed beyond what's already in the sheet.
+#     """
+#     import openpyxl
+
+#     wb = openpyxl.load_workbook(out_path)
+#     ws = wb["Sheet1"]
+
+#     # ---- collect existing counts from already written DZ rows ----
+#     existing_counts = defaultdict(int)
+#     for r in range(5, ws.max_row + 1, 2):  # first row of each 2-row block
+#         e_val = ws.cell(r, 5).value   # E = posting date
+#         u_val = ws.cell(r, 21).value  # U = customer id
+#         s_val = ws.cell(r, 19).value  # S = amount
+#         if e_val is None and u_val is None and s_val is None:
+#             continue
+#         try:
+#             s_float = float(str(s_val).replace(",", "")) if s_val is not None else 0.0
+#         except ValueError:
+#             s_float = 0.0
+#         key = (str(e_val), str(u_val), s_float)
+#         existing_counts[key] += 1
+
+#     # track how many of each key we see in THIS run
+#     seen_now = defaultdict(int)
+
+#     def row_is_empty(r: int) -> bool:
+#         # Key columns used in a DZ row (1-based): B,C,D,E,F,G,I,J,O,S,U,V
+#         key_cols = [2,3,4,5,6,7,9,10,15,19,21,22]
+#         return all(ws.cell(r, c).value is None for c in key_cols)
+
+#     # find first empty 2-row block starting at row 5
+#     row = 5
+#     while row <= ws.max_row + 1 and not row_is_empty(row):
+#         row += 2
+
+#     ymd    = post_date
+#     y_str  = ymd[:4]
+#     m_str  = ymd[4:6]
+#     md_str = f"{ymd[4:6]}.{ymd[6:]}"
+
+#     def fill(r, data, red_cols=None):
+#         red_cols = red_cols or []
+#         for col, val in data.items():
+#             cell = ws[f"{col}{r}"]
+#             cell.value = val
+#             if col in red_cols:
+#                 cell.font = RED_FONT
+#             if col == "S":
+#                 cell.number_format = "#,##0.00"
+
+#     written = 0
+#     for raw_txt, amt, db_row in matches:
+#         try:
+#             amt_float = float(str(amt).replace(",", "")) if amt is not None else 0.0
+#         except ValueError:
+#             amt_float = 0.0
+
+#         cust_id  = db_row["F"]
+#         clean_nm = db_row["G"]
+#         hkont    = db_row["C"]
+#         extra_H  = db_row["H"]
+#         extra_I  = db_row["I"]
+
+#         text_I = f"{md_str} {clean_nm} 暫收款"
+
+#         key = (ymd, str(cust_id), amt_float)
+#         seen_now[key] += 1
+
+#         # Skip until we exceed what’s already written earlier today
+#         if seen_now[key] <= existing_counts.get(key, 0):
+#             continue
+
+#         # Row 1 (DZ)
+#         r1 = {
+#             "B": "1000", "C": y_str, "D": "DZ",
+#             "E": ymd,    "F": ymd,   "G": m_str,
+#             "I": text_I,
+#             "J": "NTD",  "O": hkont, "S": amt_float,
+#             "U": cust_id, "V": text_I,
+#             "AP": extra_H, "AU": extra_I,
+#         }
+#         fill(row, r1, red_cols=["E", "F", "G", "S"])
+
+#         # Row 2 (N=5)
+#         r2 = {
+#             "L": cust_id,
+#             "N": "5",
+#             "S": -amt_float,
+#             "U": cust_id,
+#             "V": text_I,
+#         }
+#         fill(row + 1, r2)
+
+#         row += 2
+#         written += 2
+
+#     wb.save(out_path)
+#     print(f"Wrote {written} rows into {out_path.name}")
 
 def main():
     args      = parse_args()
@@ -228,11 +377,28 @@ def main():
 
     print(f"DEBUG  → matches found: {len(matches)}")
 
-    out_path = daily_output_path(post_date)
-    if not out_path.exists():
-        shutil.copy(TEMPLATE_FILE, out_path)  # first bank of the day creates the file 
-    # 5) (next: write out your two‐row blocks into the output template)
-    write_output(matches, out_path, post_date)
+    # out_path = daily_output_path(post_date)
+    # if not out_path.exists():
+    #     shutil.copy(TEMPLATE_FILE, out_path)  # first bank of the day creates the file 
+    # # 5) (next: write out your two‐row blocks into the output template)
+    # write_output(matches, out_path, post_date)
+    
+    # Decide output path for this run and gather earlier files
+    out_path, earlier_paths = next_versioned_output_path(post_date)
+    existing_counts = collect_existing_counts(earlier_paths)
+
+    # Write only new items to a NEW file (… or skip if nothing new)
+    written = write_output(matches, out_path, post_date, existing_counts)
+
+    # If nothing new was written, remove the empty file (if it got created)
+    if written == 0:
+        try:
+            if out_path.exists():
+                out_path.unlink()
+            print("No new entries; not creating a new per-run file.")
+        except Exception as e:
+            print(f"Note: could not remove empty file {out_path.name}: {e}")
+
 
 if __name__ == "__main__":
     main()

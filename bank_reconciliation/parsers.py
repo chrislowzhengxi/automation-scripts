@@ -1,9 +1,10 @@
 import openpyxl
 from pathlib import Path
+import math
 import pandas as pd
 from utils import load_sheet
 from typing import Union
-
+from utils import is_missing_number
 
 
 class BankParserBase:
@@ -339,6 +340,7 @@ def _to_float(x):
     except Exception:
         return None
 
+
 class FubonParser(BankParserBase):
     """
     Parses 1000-富邦-*.xls/.xlsx
@@ -354,14 +356,12 @@ class FubonParser(BankParserBase):
     STOP_TOKEN     = "小計"
 
     def _load_fubon_sheet(self):
-        # Try preferred names, then first sheet (index 0)
         last_err = None
-        for candidate in (*self.SHEET_CANDIDATES, 0):
+        for candidate in (*self.SHEET_CANDIDATES, 0):  # fallback to first sheet
             try:
                 return load_sheet(self.path, sheet=candidate, header=None)
             except Exception as e:
                 last_err = e
-                continue
         raise RuntimeError(
             f"Could not open a valid sheet in {self.path.name} "
             f"(tried {self.SHEET_CANDIDATES} and first sheet). Last error: {last_err}"
@@ -369,85 +369,70 @@ class FubonParser(BankParserBase):
 
     def extract_rows(self):
         sheet = self._load_fubon_sheet()
-
         rows = []
+
         if isinstance(sheet, openpyxl.worksheet.worksheet.Worksheet):
             # ── .xlsx path
             ws = sheet
-            # 1) find header row
+            # 1) find header row (F == '存入金額')
             hdr = None
             for r in range(1, ws.max_row + 1):
-                if ws[f"{self.AMOUNT_COL}{r}"].value == self.HEADER_KEYWORD:
+                v = ws[f"{self.AMOUNT_COL}{r}"].value
+                if (isinstance(v, str) and v.strip() == self.HEADER_KEYWORD) or v == self.HEADER_KEYWORD:
                     hdr = r
                     break
             if hdr is None:
                 raise RuntimeError(f"No '{self.HEADER_KEYWORD}' in {self.path.name}")
 
-            # 2) walk down until you see '小計' in column A
+            # 2) walk down until A == '小計'
             r = hdr + 1
             while r <= ws.max_row:
-                if ws[f"A{r}"].value == self.STOP_TOKEN:
+                aval = ws[f"A{r}"].value
+                if aval is not None and str(aval).strip() == self.STOP_TOKEN:
                     break
 
-                # read cells
-                raw_deposit = ws[f"{self.AMOUNT_COL}{r}"].value   # F: 存入金額
-                raw_expense = ws[f"E{r}"].value                   # E: 支出金額
-                cust        = ws[f"{self.CUSTOMER_COL}{r}"].value # I: 附言
+                # amount in F; if empty/zero → skip (do NOT read customer)
+                amt = _to_float(ws[f"{self.AMOUNT_COL}{r}"].value)
+                if is_missing_number(amt) or amt == 0:
+                    # skip row; do NOT read/compare customer
+                    r += 1
+                    continue
 
-                # skip blank 附言 (but keep scanning)
+                # customer in I; if blank → skip (but continue scanning)
+                cust = ws[f"{self.CUSTOMER_COL}{r}"].value
                 if cust is None or not str(cust).strip():
-                    r += 1
-                    continue
-
-                # skip if it’s an expense row or no deposit
-                if _to_float(raw_expense) not in (None, 0):
-                    r += 1
-                    continue
-
-                amt = _to_float(raw_deposit)
-                if amt is None or amt == 0:
                     r += 1
                     continue
 
                 rows.append((str(cust).strip(), amt))
                 r += 1
 
-
         else:
-            # ── .xls path via pandas DataFrame
+            # ── .xls path via pandas DataFrame (A=0, F=5, I=8)
             df: pd.DataFrame = sheet
-            # 1) find header row where col 5 == HEADER_KEYWORD (A=0, F=5, I=8)
-            header_rows = df[df[5] == self.HEADER_KEYWORD].index
+
+            # 1) header row
+            header_rows = df[df[5].astype(str).str.strip() == self.HEADER_KEYWORD].index
             if header_rows.empty:
                 raise RuntimeError(f"No '{self.HEADER_KEYWORD}' in {self.path.name}")
-            hdr = header_rows[0]
+            hdr = int(header_rows[0])
 
-            # 2) read until STOP_TOKEN in column 0
+            # 2) iterate until A == '小計'
             for idx in range(hdr + 1, len(df)):
-                if df.at[idx, 0] == self.STOP_TOKEN:
+                aval = df.at[idx, 0] if 0 in df.columns else None
+                if pd.notna(aval) and str(aval).strip() == self.STOP_TOKEN:
                     break
 
-                # cust = df.at[idx, 8]  # 附言
-                # amt  = df.at[idx, 5]  # 存入金額
+                amt = _to_float(df.at[idx, 5] if 5 in df.columns else None)
+                if is_missing_number(amt) or amt == 0:
+                    # skip row; do NOT read/compare customer
+                    continue
 
-                # if pd.isna(cust) or not str(cust).strip():
-                #     break
-
-                # if isinstance(amt, str):
-                #     amt = float((amt or "0").replace(",", "").strip())
-
-                # rows.append((str(cust).strip(), amt))
-                cust = df.at[idx, 8]  # I: 附言
-                raw  = df.at[idx, 5]  # F: 存入金額
+                cust = df.at[idx, 8] if 8 in df.columns else None
                 if pd.isna(cust) or not str(cust).strip():
                     continue
 
-                amt = _to_float(raw)
-                if amt is None or amt == 0:
-                    continue
-
                 rows.append((str(cust).strip(), amt))
-
 
         print(f"Loaded {len(rows)} entries from {self.path.name}")
         return rows

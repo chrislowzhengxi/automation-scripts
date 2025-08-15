@@ -3,7 +3,14 @@ import pandas as pd
 from pathlib import Path
 from typing import Union
 import csv
+import math
 
+def is_missing_number(x):
+    return (
+        x is None
+        or (isinstance(x, float) and math.isnan(x))
+        or (isinstance(x, pd._libs.missing.NAType) if hasattr(pd, "_libs") else False)
+    )
 
 def log_skipped(skipped, filepath="skipped.csv"):
     """

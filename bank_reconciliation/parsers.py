@@ -14,31 +14,102 @@ class BankParserBase:
         """Return list of (raw_customer_text, amount)."""
         raise NotImplementedError
 
+# class CitiParser(BankParserBase):
+#     """
+#     Parses 花旗對帳單 (xls/xlsx)
+#     - Prefer sheet 'Sheet2'; if missing, fall back to first sheet (index 0)
+#     - Header marker: '細節描述' in column E
+#     - Customer text: column E
+#     - Amount: column G
+#     - Start reading 2 rows below header, stop when E is blank
+#     """
+#     SHEET_CANDIDATES = ("Sheet2", 0)
+#     CUSTOMER_COL = "E"
+#     AMOUNT_COL   = "G"
+#     HEADER_KEYWORD = "細節描述"
+
+#     def _load_citi_sheet(self):
+#         last_err = None
+#         for candidate in self.SHEET_CANDIDATES:
+#             try:
+#                 return load_sheet(self.path, sheet=candidate, header=None)
+#             except Exception as e:
+#                 last_err = e
+#         raise RuntimeError(
+#             f"Could not open a valid sheet in {self.path.name} "
+#             f"(tried {self.SHEET_CANDIDATES}). Last error: {last_err}"
+#         )
+
+#     def extract_rows(self):
+#         sheet = self._load_citi_sheet()
+#         rows = []
+
+#         if isinstance(sheet, openpyxl.worksheet.worksheet.Worksheet):
+#             # ---------- .xlsx ----------
+#             ws = sheet
+#             # find header rows where E == '細節描述'
+#             hits = [
+#                 r for r in range(1, ws.max_row + 1)
+#                 if (ws[f"{self.CUSTOMER_COL}{r}"].value is not None
+#                     and str(ws[f"{self.CUSTOMER_COL}{r}"].value).strip() == self.HEADER_KEYWORD)
+#             ]
+#             if not hits:
+#                 raise RuntimeError(f"No '{self.HEADER_KEYWORD}' found in {self.path.name}")
+
+#             hdr = hits[1] if len(hits) > 1 else hits[0]
+#             r = hdr + 2
+
+#             while r <= ws.max_row:
+#                 cust = ws[f"{self.CUSTOMER_COL}{r}"].value
+#                 if cust is None or not str(cust).strip():
+#                     break
+#                 raw_amt = ws[f"{self.AMOUNT_COL}{r}"].value
+#                 amt = _to_float(raw_amt)
+#                 rows.append((str(cust).strip(), amt))
+#                 r += 1
+
+#         else:
+#             # ---------- .xls (DataFrame) ----------
+#             df: pd.DataFrame = sheet
+#             # E -> idx 4, G -> idx 6
+#             header_rows = df[df[4] == self.HEADER_KEYWORD].index
+#             if header_rows.empty:
+#                 raise RuntimeError(f"No '{self.HEADER_KEYWORD}' found in {self.path.name}")
+
+#             hdr = header_rows[1] if len(header_rows) > 1 else header_rows[0]
+#             start = hdr + 2
+
+#             for idx in range(start, len(df)):
+#                 cust = df.at[idx, 4]
+#                 if pd.isna(cust) or not str(cust).strip():
+#                     break
+#                 amt = _to_float(df.at[idx, 6])
+#                 rows.append((str(cust).strip(), amt))
+
+#         print(f"Loaded {len(rows)} entries from {self.path.name}")
+#         return rows
 class CitiParser(BankParserBase):
     """
     Parses 花旗對帳單 (xls/xlsx)
-    - Prefer sheet 'Sheet2'; if missing, fall back to first sheet (index 0)
-    - Header marker: '細節描述' in column E
-    - Customer text: column E
-    - Amount: column G
-    - Start reading 2 rows below header, stop when E is blank
+    - Prefer sheet 'Sheet2'; else first sheet
+    - Start: SECOND '細節描述' row (ignore anything above)
+    - Stop: FIRST '期終結餘' seen in column B
+    - Keep rows where 入帳 (G) has a value; customer = E
     """
     SHEET_CANDIDATES = ("Sheet2", 0)
     CUSTOMER_COL = "E"
     AMOUNT_COL   = "G"
     HEADER_KEYWORD = "細節描述"
+    STOP_TOKEN_B   = "期終結餘"
 
     def _load_citi_sheet(self):
         last_err = None
-        for candidate in self.SHEET_CANDIDATES:
+        for cand in self.SHEET_CANDIDATES:
             try:
-                return load_sheet(self.path, sheet=candidate, header=None)
+                return load_sheet(self.path, sheet=cand, header=None)
             except Exception as e:
                 last_err = e
-        raise RuntimeError(
-            f"Could not open a valid sheet in {self.path.name} "
-            f"(tried {self.SHEET_CANDIDATES}). Last error: {last_err}"
-        )
+        raise RuntimeError(f"Could not open a valid sheet in {self.path.name} (tried {self.SHEET_CANDIDATES}). Last error: {last_err}")
 
     def extract_rows(self):
         sheet = self._load_citi_sheet()
@@ -53,41 +124,59 @@ class CitiParser(BankParserBase):
                 if (ws[f"{self.CUSTOMER_COL}{r}"].value is not None
                     and str(ws[f"{self.CUSTOMER_COL}{r}"].value).strip() == self.HEADER_KEYWORD)
             ]
-            if not hits:
-                raise RuntimeError(f"No '{self.HEADER_KEYWORD}' found in {self.path.name}")
+            if len(hits) < 2:
+                raise RuntimeError(f"Less than 2 '{self.HEADER_KEYWORD}' found in {self.path.name}")
 
-            hdr = hits[1] if len(hits) > 1 else hits[0]
+            hdr = hits[1]          # ← SECOND occurrence
             r = hdr + 2
 
             while r <= ws.max_row:
+                # stop at first '期終結餘' in column B
+                bval = ws[f"B{r}"].value
+                if bval is not None and str(bval).strip() == self.STOP_TOKEN_B:
+                    break
+
+                amt = _to_float(ws[f"{self.AMOUNT_COL}{r}"].value)
+                if not amt:
+                    r += 1
+                    continue
+
                 cust = ws[f"{self.CUSTOMER_COL}{r}"].value
                 if cust is None or not str(cust).strip():
-                    break
-                raw_amt = ws[f"{self.AMOUNT_COL}{r}"].value
-                amt = _to_float(raw_amt)
+                    r += 1
+                    continue
+
                 rows.append((str(cust).strip(), amt))
                 r += 1
 
         else:
             # ---------- .xls (DataFrame) ----------
             df: pd.DataFrame = sheet
-            # E -> idx 4, G -> idx 6
-            header_rows = df[df[4] == self.HEADER_KEYWORD].index
-            if header_rows.empty:
-                raise RuntimeError(f"No '{self.HEADER_KEYWORD}' found in {self.path.name}")
+            header_rows = df[df[4].astype(str).str.strip() == self.HEADER_KEYWORD].index
+            if len(header_rows) < 2:
+                raise RuntimeError(f"Less than 2 '{self.HEADER_KEYWORD}' found in {self.path.name}")
 
-            hdr = header_rows[1] if len(header_rows) > 1 else header_rows[0]
+            hdr = int(header_rows[1])   # SECOND occurrence
             start = hdr + 2
 
             for idx in range(start, len(df)):
-                cust = df.at[idx, 4]
-                if pd.isna(cust) or not str(cust).strip():
+                bval = df.at[idx, 1] if 1 in df.columns else None
+                if pd.notna(bval) and str(bval).strip() == self.STOP_TOKEN_B:
                     break
-                amt = _to_float(df.at[idx, 6])
+
+                amt = _to_float(df.at[idx, 6] if 6 in df.columns else None)
+                if not amt:
+                    continue
+
+                cust = df.at[idx, 4] if 4 in df.columns else None
+                if pd.isna(cust) or not str(cust).strip():
+                    continue
+
                 rows.append((str(cust).strip(), amt))
 
         print(f"Loaded {len(rows)} entries from {self.path.name}")
         return rows
+
 
 
 

@@ -98,26 +98,54 @@ def load_and_filter_db(db_path, sheet, bank_display):
 
 
 def day_output_base(post_date: str) -> Path:
-    return BASE_DIR / f"會計憑證導入模板 - {post_date}.xlsx"
+    # We keep only .xls in the folder
+    return BASE_DIR / f"會計憑證導入模板 - {post_date}.xls"
 
 def enumerate_existing_outputs(post_date: str) -> list[Path]:
-    """
-    Returns existing files for the day in order:
-    [base, -2, -3, ...] if they exist.
-    """
     files = []
-    base = day_output_base(post_date)
-    if base.exists():
-        files.append(base)
+
+    # Prefer .xls runs
+    base_xls = BASE_DIR / f"會計憑證導入模板 - {post_date}.xls"
+    if base_xls.exists():
+        files.append(base_xls)
+        k = 2
+        while True:
+            p = BASE_DIR / f"會計憑證導入模板 - {post_date}-{k}.xls"
+            if p.exists():
+                files.append(p); k += 1
+            else:
+                break
+
+    # Back-compat: include any .xlsx runs
+    base_xlsx = BASE_DIR / f"會計憑證導入模板 - {post_date}.xlsx"
+    if base_xlsx.exists():
+        files.append(base_xlsx)
         k = 2
         while True:
             p = BASE_DIR / f"會計憑證導入模板 - {post_date}-{k}.xlsx"
             if p.exists():
-                files.append(p)
-                k += 1
+                files.append(p); k += 1
             else:
                 break
+
     return files
+
+
+def ensure_xlsx_from_xls(xls_path: Path) -> Path:
+    """Convert an existing .xls into a working .xlsx copy."""
+    import win32com.client as win32
+    xlsx_path = xls_path.with_suffix(".xlsx")
+    excel = win32.gencache.EnsureDispatch("Excel.Application")
+    excel.Visible = False
+    excel.DisplayAlerts = False
+    try:
+        wb = excel.Workbooks.Open(str(xls_path))
+        wb.SaveAs(str(xlsx_path), FileFormat=51)  # 51 = .xlsx
+        wb.Close(SaveChanges=False)
+    finally:
+        excel.Quit()
+    return xlsx_path
+
 
 
 def latest_or_new_output_path(post_date: str, force_new_run: bool = False) -> tuple[Path, list[Path]]:
@@ -141,30 +169,70 @@ def latest_or_new_output_path(post_date: str, force_new_run: bool = False) -> tu
     latest = earlier[-1]
     return latest, earlier
 
-
 def collect_existing_counts(paths: list[Path]) -> dict:
-    """
-    Aggregate duplicate keys across ALL earlier files of the same day.
-    Key = (E posting_date as str, U cust_id as str, S amount as float)
-    """
-    import openpyxl
+    from collections import defaultdict
+    import pandas as pd, openpyxl
     counts = defaultdict(int)
+
     for p in paths:
-        wb = openpyxl.load_workbook(p, data_only=True)
-        ws = wb["Sheet1"]
-        for r in range(5, ws.max_row + 1, 2):
-            e_val = ws.cell(r, 5).value   # E
-            u_val = ws.cell(r, 21).value  # U
-            s_val = ws.cell(r, 19).value  # S
-            if e_val is None and u_val is None and s_val is None:
-                continue
-            try:
-                s_float = float(str(s_val).replace(",", "")) if s_val is not None else 0.0
-            except ValueError:
-                s_float = 0.0
-            key = (str(e_val), str(u_val), s_float)
-            counts[key] += 1
+        try:
+            if p.suffix.lower() == ".xlsx":
+                wb = openpyxl.load_workbook(p, data_only=True)
+                ws = wb["Sheet1"]
+                for r in range(5, ws.max_row + 1, 2):
+                    e_val = ws.cell(r, 5).value   # E
+                    u_val = ws.cell(r, 21).value  # U
+                    s_val = ws.cell(r, 19).value  # S
+                    if e_val is None and u_val is None and s_val is None:
+                        continue
+                    try:
+                        s_float = float(str(s_val).replace(",", "")) if s_val is not None else 0.0
+                    except ValueError:
+                        s_float = 0.0
+                    counts[(str(e_val), str(u_val), s_float)] += 1
+
+            elif p.suffix.lower() == ".xls":
+                df = pd.read_excel(p, sheet_name="Sheet1", header=None, engine="xlrd")
+                # zero-based cols: E=4, S=18, U=20; start row index 4 (Excel row 5), step by 2
+                for r in range(4, len(df), 2):
+                    e_val = df.iat[r, 4] if df.shape[1] > 4 else None
+                    u_val = df.iat[r, 20] if df.shape[1] > 20 else None
+                    s_val = df.iat[r, 18] if df.shape[1] > 18 else None
+                    if pd.isna(e_val) and pd.isna(u_val) and pd.isna(s_val):
+                        continue
+                    try:
+                        s_float = float(str(s_val).replace(",", "")) if pd.notna(s_val) else 0.0
+                    except ValueError:
+                        s_float = 0.0
+                    counts[(str(e_val), str(u_val), s_float)] += 1
+            else:
+                print(f"[WARN] Unknown extension for earlier file: {p.name}; skipping.")
+        except Exception as e:
+            print(f"[WARN] Could not read earlier file {p.name}: {e}; skipping.")
     return counts
+# def collect_existing_counts(paths: list[Path]) -> dict:
+#     """
+#     Aggregate duplicate keys across ALL earlier files of the same day.
+#     Key = (E posting_date as str, U cust_id as str, S amount as float)
+#     """
+#     import openpyxl
+#     counts = defaultdict(int)
+#     for p in paths:
+#         wb = openpyxl.load_workbook(p, data_only=True)
+#         ws = wb["Sheet1"]
+#         for r in range(5, ws.max_row + 1, 2):
+#             e_val = ws.cell(r, 5).value   # E
+#             u_val = ws.cell(r, 21).value  # U
+#             s_val = ws.cell(r, 19).value  # S
+#             if e_val is None and u_val is None and s_val is None:
+#                 continue
+#             try:
+#                 s_float = float(str(s_val).replace(",", "")) if s_val is not None else 0.0
+#             except ValueError:
+#                 s_float = 0.0
+#             key = (str(e_val), str(u_val), s_float)
+#             counts[key] += 1
+#     return counts
 
 
 def write_output(matches, out_path: Path, post_date: str, existing_counts: dict) -> int:
@@ -276,15 +344,15 @@ def write_output(matches, out_path: Path, post_date: str, existing_counts: dict)
     wb.save(out_path)
     print(f"Wrote {written} rows into {out_path.name}")
 
-    # Checking numeric properties 
-    check_wb = openpyxl.load_workbook(out_path, data_only=True)
-    check_ws = check_wb["Sheet1"]
+    # # Checking numeric properties 
+    # check_wb = openpyxl.load_workbook(out_path, data_only=True)
+    # check_ws = check_wb["Sheet1"]
 
-    for row in range(5, check_ws.max_row + 1):
-        val = check_ws[f"S{row}"].value
-        if val is None:
-            continue
-        print(f"Row {row}, type={type(val)}, value={val}")
+    # for row in range(5, check_ws.max_row + 1):
+    #     val = check_ws[f"S{row}"].value
+    #     if val is None:
+    #         continue
+    #     print(f"Row {row}, type={type(val)}, value={val}")
 
     return written
 
@@ -346,6 +414,27 @@ def main():
 
     print("[INFO] Checking existing outputs & deciding target file...")
     out_path, earlier_paths = latest_or_new_output_path(post_date, force_new_run=args.new_run)
+    # If appending to an existing .xls, convert to .xlsx first
+    working_out = out_path
+    # if out_path.suffix.lower() == ".xls" and out_path.exists():
+    #     try:
+    #         working_out = ensure_xlsx_from_xls(out_path)
+    #         print(f"[INFO] Using working file: {working_out.name} (converted from existing .xls)")
+    #     except Exception as e:
+    #         print(f"[WARN] Could not convert existing .xls to .xlsx: {e}")
+    #         working_out = out_path.with_suffix(".xlsx")  # fallback to fresh
+    if out_path.suffix.lower() == ".xls":
+        if out_path.exists():
+            try:
+                working_out = ensure_xlsx_from_xls(out_path)
+                print(f"[INFO] Using working file: {working_out.name} (converted from existing .xls)")
+            except Exception as e:
+                print(f"[WARN] Could not convert existing .xls to .xlsx: {e}")
+                working_out = out_path.with_suffix(".xlsx")  # fallback
+        else:
+            # NEW-DATE CASE: the .xls doesn't exist yet → write to a true .xlsx temp
+            working_out = out_path.with_suffix(".xlsx")
+            print(f"[INFO] New run: using working file {working_out.name} before saving as .xls")
     print(f"[INFO] earlier_paths={ [p.name for p in earlier_paths] }")
     print(f"[MODE] {'NEW RUN' if args.new_run else 'Append to latest'}")
     print(f"[INFO] chosen out_path={out_path.name} (force_new_run={args.new_run})")
@@ -356,7 +445,8 @@ def main():
     existing_counts = collect_existing_counts(earlier_paths)
 
     # Write only new items to this file (append if it already exists)
-    written = write_output(matches, out_path, post_date, existing_counts)
+    # written = write_output(matches, out_path, post_date, existing_counts)
+    written = write_output(matches, working_out, post_date, existing_counts)
 
     # If nothing new was written, only delete if we created a brand new file this time
     if written == 0 and not preexisted:
@@ -372,15 +462,23 @@ def main():
             print(f"Note: could not remove empty file {out_path.name}: {e}")
 
     try:
-        if out_path.exists():
-            xls_out = ensure_xls_copy(out_path)
+        # if out_path.exists():
+        #     xls_out = ensure_xls_copy(out_path)
+        #     print(f"[SAP] Also saved legacy Excel: {xls_out.name}")
+        #     # remove the .xlsx after conversion
+        #     try:
+        #         out_path.unlink()
+        #         print(f"[CLEANUP] Removed intermediate {out_path.name}")
+        #     except Exception as e:
+        #         print(f"[CLEANUP] Could not remove {out_path.name}: {e}")
+        if working_out.exists():
+            xls_out = ensure_xls_copy(working_out)  # SaveAs .xls (overwrites/creates the .xls twin)
             print(f"[SAP] Also saved legacy Excel: {xls_out.name}")
-            # remove the .xlsx after conversion
             try:
-                out_path.unlink()
-                print(f"[CLEANUP] Removed intermediate {out_path.name}")
+                working_out.unlink()  # delete the temporary .xlsx
+                print(f"[CLEANUP] Removed intermediate {working_out.name}")
             except Exception as e:
-                print(f"[CLEANUP] Could not remove {out_path.name}: {e}")
+                print(f"[CLEANUP] Could not remove {working_out.name}: {e}")
 
     except ImportError as e:
         print(f"[SAP] Note: {e}. Skipping .xls creation.")

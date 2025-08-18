@@ -196,15 +196,34 @@ def write_output(matches, out_path: Path, post_date: str, existing_counts: dict)
     m_str  = ymd[4:6]
     md_str = f"{ymd[4:6]}.{ymd[6:]}"
 
+    # def fill(r, data, red_cols=None):
+    #     red_cols = red_cols or []
+    #     for col, val in data.items():
+    #         cell = ws[f"{col}{r}"]
+    #         cell.value = val
+    #         if col in red_cols:
+    #             cell.font = RED_FONT
+    #         if col == "S":
+    #             cell.number_format = "#,##0.00"
     def fill(r, data, red_cols=None):
         red_cols = red_cols or []
         for col, val in data.items():
             cell = ws[f"{col}{r}"]
+            # ensure amounts are real numbers
+            if col == "S" and isinstance(val, str):
+                try:
+                    val = float(val.replace(",", ""))
+                except Exception:
+                    pass
             cell.value = val
+            # if col == "S":
+            #     # make sure Excel sees it as a number
+            #     assert isinstance(cell.value, (int, float)), f"Cell {col}{r} is not numeric: {cell.value!r}"
             if col in red_cols:
                 cell.font = RED_FONT
             if col == "S":
-                cell.number_format = "#,##0.00"
+                # no thousands separator — SAP-friendly
+                cell.number_format = "0.00"
 
     seen_now = defaultdict(int)
     written = 0
@@ -256,6 +275,17 @@ def write_output(matches, out_path: Path, post_date: str, existing_counts: dict)
 
     wb.save(out_path)
     print(f"Wrote {written} rows into {out_path.name}")
+
+    # Checking numeric properties 
+    check_wb = openpyxl.load_workbook(out_path, data_only=True)
+    check_ws = check_wb["Sheet1"]
+
+    for row in range(5, check_ws.max_row + 1):
+        val = check_ws[f"S{row}"].value
+        if val is None:
+            continue
+        print(f"Row {row}, type={type(val)}, value={val}")
+
     return written
 
 def ensure_xls_copy(xlsx_path: Path) -> Path:

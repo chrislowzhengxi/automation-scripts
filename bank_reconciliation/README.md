@@ -249,6 +249,27 @@ Displays processing details, including:
 
 ---
 
+
+## 📄 Output Format
+
+> **Note:** All generated files are now exported in **Excel 97–2003 format (`.xls`)**.
+
+This change was made for SAP compatibility — the current SAP upload program only accepts legacy `.xls` files.
+
+* Intermediate `.xlsx` files are created internally during processing, but are automatically converted to `.xls` and then removed.
+* The final files you see in your output folder will look like:
+
+```
+會計憑證導入模板 - 20250715.xls
+會計憑證導入模板 - 20250715-2.xls
+...
+```
+
+These `.xls` files can be uploaded directly to SAP without manual conversion.
+
+---
+
+
 ## 2. Developer Guide
 
 ### 2.1 File Structure

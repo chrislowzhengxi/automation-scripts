@@ -258,6 +258,35 @@ def write_output(matches, out_path: Path, post_date: str, existing_counts: dict)
     print(f"Wrote {written} rows into {out_path.name}")
     return written
 
+def ensure_xls_copy(xlsx_path: Path) -> Path:
+    """
+    Create an .xls copy of the given .xlsx using Excel automation.
+    Returns the .xls path. If Excel/pywin32 is unavailable, raises ImportError.
+    """
+    from time import sleep
+    try:
+        import win32com.client as win32
+    except ImportError as e:
+        raise ImportError("pywin32 is required for .xls conversion. pip install pywin32") from e
+
+    xls_path = xlsx_path.with_suffix(".xls")
+
+    excel = win32.gencache.EnsureDispatch("Excel.Application")
+    excel.Visible = False
+    excel.DisplayAlerts = False
+    try:
+        wb = excel.Workbooks.Open(str(xlsx_path))
+        # 56 = xlWorkbookNormal (Excel 97-2003, .xls)
+        wb.SaveAs(str(xls_path), FileFormat=56)
+        wb.Close(SaveChanges=False)
+        # Give Excel a tick to flush
+        sleep(0.1)
+    finally:
+        excel.Quit()
+
+    return xls_path
+
+
 
 def main():
     args      = parse_args()
@@ -312,6 +341,21 @@ def main():
         except Exception as e:
             print(f"Note: could not remove empty file {out_path.name}: {e}")
 
+    try:
+        if out_path.exists():
+            xls_out = ensure_xls_copy(out_path)
+            print(f"[SAP] Also saved legacy Excel: {xls_out.name}")
+            # remove the .xlsx after conversion
+            try:
+                out_path.unlink()
+                print(f"[CLEANUP] Removed intermediate {out_path.name}")
+            except Exception as e:
+                print(f"[CLEANUP] Could not remove {out_path.name}: {e}")
+
+    except ImportError as e:
+        print(f"[SAP] Note: {e}. Skipping .xls creation.")
+    except Exception as e:
+        print(f"[SAP] Could not create .xls copy: {e}")
 
 if __name__ == "__main__":
     main()

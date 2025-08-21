@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 from copy import copy as copy_style
 from datetime import datetime, date
+from openpyxl.styles import Alignment
 import re
 import sys
 import pandas as pd
@@ -82,16 +83,42 @@ def to_date_value(v):
     except Exception:
         return v
 
-def copy_header_style(src_ws, src_col_indexes: list[int], dst_ws):
+# def copy_header_style(src_ws, src_col_indexes: list[int], dst_ws):
+#     """
+#     Copy header cell style from src_ws row=1 columns (by numeric index),
+#     and apply to dst_ws row=1 1..N.
+#     """
+#     for j, src_col_idx in enumerate(src_col_indexes, start=1):
+#         src_cell = src_ws.cell(row=1, column=src_col_idx)
+#         dst_cell = dst_ws.cell(row=1, column=j)
+
+#         # Style pieces
+#         if src_cell.has_style:
+#             dst_cell.font = copy_style(src_cell.font)
+#             dst_cell.fill = copy_style(src_cell.fill)
+#             dst_cell.border = copy_style(src_cell.border)
+#             dst_cell.alignment = copy_style(src_cell.alignment)
+#             dst_cell.number_format = src_cell.number_format
+#             dst_cell.protection = copy_style(src_cell.protection)
+#         # also copy column width-ish by setting width from source column
+#         try:
+#             src_letter = openpyxl.utils.get_column_letter(src_col_idx)
+#             dst_letter = openpyxl.utils.get_column_letter(j)
+#             width = src_ws.column_dimensions[src_letter].width
+#             if width:
+#                 dst_ws.column_dimensions[dst_letter].width = width
+#         except Exception:
+#             pass
+
+
+def copy_header_style(src_ws, src_col_indexes: list[int], dst_ws, dst_row: int = 1):
     """
     Copy header cell style from src_ws row=1 columns (by numeric index),
-    and apply to dst_ws row=1 1..N.
+    and apply to dst_ws row=dst_row 1..N.
     """
     for j, src_col_idx in enumerate(src_col_indexes, start=1):
         src_cell = src_ws.cell(row=1, column=src_col_idx)
-        dst_cell = dst_ws.cell(row=1, column=j)
-
-        # Style pieces
+        dst_cell = dst_ws.cell(row=dst_row, column=j)   # <-- use dst_row here
         if src_cell.has_style:
             dst_cell.font = copy_style(src_cell.font)
             dst_cell.fill = copy_style(src_cell.fill)
@@ -99,7 +126,7 @@ def copy_header_style(src_ws, src_col_indexes: list[int], dst_ws):
             dst_cell.alignment = copy_style(src_cell.alignment)
             dst_cell.number_format = src_cell.number_format
             dst_cell.protection = copy_style(src_cell.protection)
-        # also copy column width-ish by setting width from source column
+        # column width copy stays the same (width is per-column)
         try:
             src_letter = openpyxl.utils.get_column_letter(src_col_idx)
             dst_letter = openpyxl.utils.get_column_letter(j)
@@ -108,7 +135,6 @@ def copy_header_style(src_ws, src_col_indexes: list[int], dst_ws):
                 dst_ws.column_dimensions[dst_letter].width = width
         except Exception:
             pass
-
 # ---------------- core ----------------
 
 def group_export_by_account(
@@ -205,34 +231,63 @@ def group_export_by_account(
 
         summary = df_tmp[code_mask & uncleared_mask & age_mask].copy()
 
-        if not summary.empty:
-            title = "說明"
-            if title in wb.sheetnames:
-                del wb[title]
-            ws = wb.create_sheet(title=title, index=0)
+        title = "說明"
+        if title in wb.sheetnames:
+            del wb[title]
+        ws = wb.create_sheet(title=title, index=0)
 
-            # Use same B..X selection you already computed
-            # (selected_cols comes from earlier; we reuse it)
-            # Header
+        # Use same B..X selection you already computed
+        # (selected_cols comes from earlier; we reuse it)
+        # Header
+        for j, col_name in enumerate(selected_cols, start=1):
+            ws.cell(row=1, column=j, value=str(col_name))
+
+        # Optional: copy header style like other sheets
+        copy_header_style(src_ws, [df_export.columns.get_loc(c) + 1 for c in selected_cols], ws, dst_row=1)
+
+        # Rows
+        for i, row in enumerate(summary[selected_cols].itertuples(index=False, name=None), start=2):
+            for j, val in enumerate(row, start=1):
+                ws.cell(row=i, column=j, value=val)
+
+        # Apply m/d/yyyy to date columns if present
+        DATE_COLS = {"文件日期", "過帳日期"}
+        header_to_idx = {h: idx+1 for idx, h in enumerate(selected_cols)}
+        for h in DATE_COLS:
+            if h in header_to_idx:
+                cidx = header_to_idx[h]
+                for r in range(2, 2 + len(summary)):
+                    ws.cell(row=r, column=cidx).number_format = "m/d/yyyy"
+
+        # ---- Append 存出保證金 (split into two sections: 11780300 then 18200100) ----
+        CODES_SEQ = [("11780300", "存出保證金-流動"), ("18200100", "存出保證金")]
+
+        for idx, (code, _label) in enumerate(CODES_SEQ):
+            sub = df_tmp[df_tmp["_code"] == code].copy()
+            if sub.empty:
+                continue
+
+            # leave 2 blank rows after whatever content already exists
+            start_row = ws.max_row + 3 if idx == 0 else ws.max_row + 2
+
+            # Header (repeat for each section)
             for j, col_name in enumerate(selected_cols, start=1):
-                ws.cell(row=1, column=j, value=str(col_name))
-
-            # Optional: copy header style like other sheets
-            copy_header_style(src_ws, [df_export.columns.get_loc(c) + 1 for c in selected_cols], ws)
+                ws.cell(row=start_row, column=j, value=str(col_name))
+            copy_header_style(src_ws, [df_export.columns.get_loc(c) + 1 for c in selected_cols], ws, dst_row=start_row)
 
             # Rows
-            for i, row in enumerate(summary[selected_cols].itertuples(index=False, name=None), start=2):
+            for i, row in enumerate(sub[selected_cols].itertuples(index=False, name=None), start=start_row + 1):
                 for j, val in enumerate(row, start=1):
                     ws.cell(row=i, column=j, value=val)
 
-            # Apply m/d/yyyy to date columns if present
-            DATE_COLS = {"文件日期", "過帳日期"}
-            header_to_idx = {h: idx+1 for idx, h in enumerate(selected_cols)}
+            # Date formatting for this section
             for h in DATE_COLS:
                 if h in header_to_idx:
                     cidx = header_to_idx[h]
-                    for r in range(2, 2 + len(summary)):
+                    for r in range(start_row + 1, start_row + 1 + len(sub)):
                         ws.cell(row=r, column=cidx).number_format = "m/d/yyyy"
+
+
 
     # 7) remove original sheets in the OUTPUT (not touching your source file if you chose a new file)
     #    We will always save to output_path; if not inplace, that's a different file.
@@ -260,6 +315,7 @@ def group_export_by_account(
         "date_columns_formatted": sorted(date_cols_set),
         "dropped_sheets": [t for t in drop_original_titles if t.lower() in to_drop_ci],
     }
+
 
 # ---------------- CLI ----------------
 

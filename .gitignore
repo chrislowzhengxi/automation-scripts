@@ -15,3 +15,19 @@ Thumbs.db
 
 # Logs
 log.txt
+
+# Ignore all Excel files by default
+*.xlsx
+*.xlsm
+
+# But keep the master workbook
+!fourth/export-科餘-1000-asset.xlsx
+
+# Keep the reference mapping file
+!fourth/會計科目對照表.xlsx
+
+# Excel temp/lock files (always ignore)
+~$*
+
+# (optional) ignore other archives/outputs
+*.zip

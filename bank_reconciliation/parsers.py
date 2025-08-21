@@ -213,18 +213,15 @@ class CTBCParser(BankParserBase):
             if hdr is None:
                 raise RuntimeError(f"No '{self.HEADER_KEYWORD}' in {self.path.name}")
 
-            # 2) read until J is blank
-            r = hdr + 1
-            while r <= ws.max_row:
+            # 2) scan all rows after header
+            for r in range(hdr + 1, ws.max_row + 1):
                 cust = ws[f"{self.CUSTOMER_COL}{r}"].value
-                if cust is None or not str(cust).strip():
-                    break
-
                 raw_amt = ws[f"{self.AMOUNT_COL}{r}"].value
                 amt = _to_float(raw_amt)
 
-                rows.append((str(cust).strip(), amt))
-                r += 1
+                # only keep rows with a valid amount
+                if amt is not None:
+                    rows.append((str(cust).strip() if cust else "", amt))
 
         else:
             # ---- .xls path (pandas DataFrame) ----
@@ -236,15 +233,16 @@ class CTBCParser(BankParserBase):
             hdr = header_rows[0]
 
             for idx in range(hdr + 1, len(df)):
-                cust = df.at[idx, 9]
-                if pd.isna(cust) or not str(cust).strip():
-                    break
+                cust = df.at[idx, 9] if 9 in df.columns else None
+                raw_amt = df.at[idx, 4] if 4 in df.columns else None
+                amt = _to_float(raw_amt)
 
-                amt = _to_float(df.at[idx, 4])
-                rows.append((str(cust).strip(), amt))
+                if amt is not None:
+                    rows.append((str(cust).strip() if cust and not pd.isna(cust) else "", amt))
 
         print(f"Loaded {len(rows)} entries from {self.path.name}")
         return rows
+
 
 
 class MegaParser(BankParserBase):

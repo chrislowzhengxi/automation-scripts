@@ -1,5 +1,6 @@
 from collections import defaultdict
 import shutil
+import os
 from pathlib import Path
 from parsers import CitiParser, CTBCParser, MegaParser, FubonParser, SinopacParser, ESunParser, BankParserBase
 from fuzzy_matcher import match_entries_interactive, match_entries_debug
@@ -29,23 +30,37 @@ import openpyxl
 from datetime import datetime
 from openpyxl.styles import Font
 from rapidfuzz import process, fuzz
-from pathlib import Path
+
+
+
+
+# --- Default directories (these match your coworker’s request) ---
+DEFAULT_BANK_IN_DIR = Path(r"\\files.wistronits.com\WF000\Treasury\出納入帳導入\銀存收款導出")
+DEFAULT_OUT_DIR     = Path(r"\\files.wistronits.com\WF000\Treasury\出納入帳導入\導入-收款\1000")
+
+# --- Allow overrides by environment variable (so you can run locally with your own paths) ---
+BANK_IN_DIR = Path(os.getenv("TREASURY_BANK_IN_DIR", str(DEFAULT_BANK_IN_DIR)))
+OUT_DIR     = Path(os.getenv("TREASURY_OUT_DIR",     str(DEFAULT_OUT_DIR)))
+
+# --- Template file lives in OUT_DIR ---
+TEMPLATE_FILE = OUT_DIR / "會計憑證導入模板 - 空白檔案.xlsx"
+
 
 # ─────────────── Configuration ───────────────
 BASE_DIR        = Path("~/Downloads/Banks").expanduser()
-BANK_FILE       = BASE_DIR / "花旗銀行對帳單-20250625.xlsx"
-BANK_SHEET      = "Sheet2"
-DB_FILE         = BASE_DIR / "會計憑證導入模板 - 1000 客戶資料庫.xls"
+# DB_FILE         = BASE_DIR / "會計憑證導入模板 - 1000 客戶資料庫.xls"
+DB_FILE         = OUT_DIR / "會計憑證導入模板 - 1000 客戶資料庫.xls"
+
 DB_SHEET        = "客戶資料庫"
 FUZZY_THRESHOLD = 80
 # OUTPUT_FILE = BASE_DIR / "會計憑證導入模板 - 空白檔案.xlsx"
 RED_FONT    = Font(color="FF0000")
 
 
-TEMPLATE_FILE = BASE_DIR / "會計憑證導入模板 - 空白檔案.xlsx"
-def daily_output_path(post_date: str) -> Path:
-    # post_date like "20250715"
-    return BASE_DIR / f"會計憑證導入模板 - {post_date}.xlsx"
+# TEMPLATE_FILE = BASE_DIR / "會計憑證導入模板 - 空白檔案.xlsx"
+# def daily_output_path(post_date: str) -> Path:
+#     # post_date like "20250715"
+#     return BASE_DIR / f"會計憑證導入模板 - {post_date}.xlsx"
 
 COL_DESC = "E"
 COL_AMT  = "G"
@@ -63,22 +78,35 @@ BANK_MAP = {
 
 # ─────────────── Functions ───────────────
 
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument(
-        "--file", "-f",
-        required=True,
-        help="Path to the bank statement Excel file (xls or xlsx)"
-    )
-    p.add_argument("--date", "-d",
-                   help="Posting date in YYYYMMDD (defaults to today)")
+# def parse_args():
+#     p = argparse.ArgumentParser()
+#     p.add_argument(
+#         "--file", "-f",
+#         required=True,
+#         help="Path to the bank statement Excel file (xls or xlsx)"
+#     )
+#     p.add_argument("--date", "-d",
+#                    help="Posting date in YYYYMMDD (defaults to today)")
     
-    p.add_argument(
-        "--new-run",
-        action="store_true",
-        help="Start a new versioned file for this date instead of appending to the latest one."
-    )
+#     p.add_argument(
+#         "--new-run",
+#         action="store_true",
+#         help="Start a new versioned file for this date instead of appending to the latest one."
+#     )
+#     return p.parse_args()
+
+def parse_args():
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("-f", "--file", required=True, help="Bank statement file (xls/xlsx)")
+    p.add_argument("-d", "--date", help="Posting date YYYYMMDD")
+    p.add_argument("--new-run", action="store_true", help="Force new output file")
+    p.add_argument("--in-dir",  help="Override bank input directory")
+    p.add_argument("--out-dir", help="Override output/template directory")
     return p.parse_args()
+
+
+
 
 def detect_bank(stem, bank_map):
     for key, display in bank_map.items():
@@ -99,30 +127,30 @@ def load_and_filter_db(db_path, sheet, bank_display):
 
 def day_output_base(post_date: str) -> Path:
     # We keep only .xls in the folder
-    return BASE_DIR / f"會計憑證導入模板 - {post_date}.xls"
+    return OUT_DIR / f"會計憑證導入模板 - {post_date}.xls"
 
 def enumerate_existing_outputs(post_date: str) -> list[Path]:
     files = []
 
     # Prefer .xls runs
-    base_xls = BASE_DIR / f"會計憑證導入模板 - {post_date}.xls"
+    base_xls = OUT_DIR / f"會計憑證導入模板 - {post_date}.xls"
     if base_xls.exists():
         files.append(base_xls)
         k = 2
         while True:
-            p = BASE_DIR / f"會計憑證導入模板 - {post_date}-{k}.xls"
+            p = OUT_DIR / f"會計憑證導入模板 - {post_date}-{k}.xls"
             if p.exists():
                 files.append(p); k += 1
             else:
                 break
 
     # Back-compat: include any .xlsx runs
-    base_xlsx = BASE_DIR / f"會計憑證導入模板 - {post_date}.xlsx"
+    base_xlsx = OUT_DIR / f"會計憑證導入模板 - {post_date}.xlsx"
     if base_xlsx.exists():
         files.append(base_xlsx)
         k = 2
         while True:
-            p = BASE_DIR / f"會計憑證導入模板 - {post_date}-{k}.xlsx"
+            p = OUT_DIR / f"會計憑證導入模板 - {post_date}-{k}.xlsx"
             if p.exists():
                 files.append(p); k += 1
             else:
@@ -163,7 +191,7 @@ def latest_or_new_output_path(post_date: str, force_new_run: bool = False) -> tu
 
     if force_new_run:
         next_idx = len(earlier) + 1
-        return BASE_DIR / f"會計憑證導入模板 - {post_date}-{next_idx}.xlsx", earlier
+        return OUT_DIR / f"會計憑證導入模板 - {post_date}-{next_idx}.xlsx", earlier
 
     # Reuse the latest existing file (append), whether it's base or a -N
     latest = earlier[-1]
@@ -390,6 +418,17 @@ def main():
     args      = parse_args()
     print(f"[ARGS] file={args.file} date={args.date or datetime.today().strftime('%Y%m%d')} new_run={args.new_run}")
 
+    # Apply overrides if given
+    global BANK_IN_DIR, OUT_DIR, TEMPLATE_FILE
+    if args.in_dir:
+        BANK_IN_DIR = Path(args.in_dir)
+    if args.out_dir:
+        OUT_DIR = Path(args.out_dir)
+        TEMPLATE_FILE = OUT_DIR / "會計憑證導入模板 - 空白檔案.xlsx"
+        DB_FILE = OUT_DIR / "會計憑證導入模板 - 1000 客戶資料庫.xls" 
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True) 
+
     post_date = args.date or datetime.today().strftime("%Y%m%d")
 
     bank_path = Path(args.file).expanduser()
@@ -416,13 +455,6 @@ def main():
     out_path, earlier_paths = latest_or_new_output_path(post_date, force_new_run=args.new_run)
     # If appending to an existing .xls, convert to .xlsx first
     working_out = out_path
-    # if out_path.suffix.lower() == ".xls" and out_path.exists():
-    #     try:
-    #         working_out = ensure_xlsx_from_xls(out_path)
-    #         print(f"[INFO] Using working file: {working_out.name} (converted from existing .xls)")
-    #     except Exception as e:
-    #         print(f"[WARN] Could not convert existing .xls to .xlsx: {e}")
-    #         working_out = out_path.with_suffix(".xlsx")  # fallback to fresh
     if out_path.suffix.lower() == ".xls":
         if out_path.exists():
             try:
@@ -462,15 +494,6 @@ def main():
             print(f"Note: could not remove empty file {out_path.name}: {e}")
 
     try:
-        # if out_path.exists():
-        #     xls_out = ensure_xls_copy(out_path)
-        #     print(f"[SAP] Also saved legacy Excel: {xls_out.name}")
-        #     # remove the .xlsx after conversion
-        #     try:
-        #         out_path.unlink()
-        #         print(f"[CLEANUP] Removed intermediate {out_path.name}")
-        #     except Exception as e:
-        #         print(f"[CLEANUP] Could not remove {out_path.name}: {e}")
         if working_out.exists():
             xls_out = ensure_xls_copy(working_out)  # SaveAs .xls (overwrites/creates the .xls twin)
             print(f"[SAP] Also saved legacy Excel: {xls_out.name}")
@@ -484,6 +507,8 @@ def main():
         print(f"[SAP] Note: {e}. Skipping .xls creation.")
     except Exception as e:
         print(f"[SAP] Could not create .xls copy: {e}")
+
+
 
 if __name__ == "__main__":
     main()

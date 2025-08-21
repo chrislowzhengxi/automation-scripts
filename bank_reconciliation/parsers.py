@@ -219,8 +219,7 @@ class CTBCParser(BankParserBase):
                 raw_amt = ws[f"{self.AMOUNT_COL}{r}"].value
                 amt = _to_float(raw_amt)
 
-                # only keep rows with a valid amount
-                if amt is not None:
+                if amt and amt > 0:
                     rows.append((str(cust).strip() if cust else "", amt))
 
         else:
@@ -237,7 +236,7 @@ class CTBCParser(BankParserBase):
                 raw_amt = df.at[idx, 4] if 4 in df.columns else None
                 amt = _to_float(raw_amt)
 
-                if amt is not None:
+                if amt and amt > 0:
                     rows.append((str(cust).strip() if cust and not pd.isna(cust) else "", amt))
 
         print(f"Loaded {len(rows)} entries from {self.path.name}")

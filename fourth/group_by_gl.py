@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 from copy import copy as copy_style
+from datetime import datetime, date
 import re
 import sys
 import pandas as pd
@@ -118,6 +119,7 @@ def group_export_by_account(
     inplace: bool,
     drop_original_titles: list[str],
     date_columns: list[str],
+    cutoff_date: date | None = None, 
 ) -> dict:
     # 1) Read export + detect columns
     df_export, sheet_used = read_export_frame(export_path, sheet_name)
@@ -172,6 +174,66 @@ def group_export_by_account(
                 else:
                     ws.cell(row=i, column=j, value=val)
 
+    # ---- Build the “>30 days 未報銷 (未結清)” summary for 預付費用 ----
+    TARGET_CODES = {"12580100", "12680100"}    # 預付費用 + 其他預付款
+    DATE_COL = "過帳日期"
+    UNCLEARED_COL = "結清文件"                  # treat empty as 未結清
+
+    # Ensure needed columns exist
+    missing = [c for c in [DATE_COL, UNCLEARED_COL, gl_col] if c not in df_export.columns]
+    if not missing:
+        df_tmp = df_export.copy()
+
+        # normalize posting date to pure date
+        dt = pd.to_datetime(df_tmp[DATE_COL], errors="coerce")
+        df_tmp["_posting_date"] = dt.dt.date
+
+        co = cutoff_date or date.today()
+
+        # 未結清 if blank/NaN
+        uncleared_mask = df_tmp[UNCLEARED_COL].isna() | (df_tmp[UNCLEARED_COL].astype(str).str.strip() == "")
+
+        # 科目 in targets (normalized)
+        df_tmp["_code"] = df_tmp[gl_col].apply(norm_code)
+        code_mask = df_tmp["_code"].isin(TARGET_CODES)
+
+        # older than 30 days
+        age_mask = df_tmp["_posting_date"].notna() & (
+            (pd.to_datetime(co) - pd.to_datetime(df_tmp["_posting_date"]))
+            .dt.days > 30
+        )
+
+        summary = df_tmp[code_mask & uncleared_mask & age_mask].copy()
+
+        if not summary.empty:
+            title = "預付費用>30天未報銷"
+            if title in wb.sheetnames:
+                del wb[title]
+            ws = wb.create_sheet(title=title)
+
+            # Use same B..X selection you already computed
+            # (selected_cols comes from earlier; we reuse it)
+            # Header
+            for j, col_name in enumerate(selected_cols, start=1):
+                ws.cell(row=1, column=j, value=str(col_name))
+
+            # Optional: copy header style like other sheets
+            copy_header_style(src_ws, [df_export.columns.get_loc(c) + 1 for c in selected_cols], ws)
+
+            # Rows
+            for i, row in enumerate(summary[selected_cols].itertuples(index=False, name=None), start=2):
+                for j, val in enumerate(row, start=1):
+                    ws.cell(row=i, column=j, value=val)
+
+            # Apply m/d/yyyy to date columns if present
+            DATE_COLS = {"文件日期", "過帳日期"}
+            header_to_idx = {h: idx+1 for idx, h in enumerate(selected_cols)}
+            for h in DATE_COLS:
+                if h in header_to_idx:
+                    cidx = header_to_idx[h]
+                    for r in range(2, 2 + len(summary)):
+                        ws.cell(row=r, column=cidx).number_format = "m/d/yyyy"
+
     # 7) remove original sheets in the OUTPUT (not touching your source file if you chose a new file)
     #    We will always save to output_path; if not inplace, that's a different file.
     #    Either way, we delete the listed titles if present.
@@ -217,7 +279,20 @@ def main():
                    help="Comma-separated sheet titles to delete from the output (case-insensitive). Default: Sheet1,Sheet2,Sheet3")
     p.add_argument("--date-cols", default="文件日期,過帳日期",
                    help="Comma-separated header names treated as dates and formatted m/d/yyyy. Default: 文件日期,過帳日期")
+    
+    p.add_argument("--cutoff", default=None,
+               help="Cutoff date for 'older than 30 days' checks, e.g. 2025-06-30. Defaults to today.")
+    
     args = p.parse_args()
+    if args.cutoff:
+        try:
+            cutoff_date = datetime.strptime(args.cutoff, "%Y-%m-%d").date()
+        except ValueError:
+            print("[ERROR] --cutoff must be YYYY-MM-DD (e.g., 2025-06-30)", file=sys.stderr)
+            sys.exit(2)
+    else:
+        cutoff_date = date.today()
+
 
     export_path = Path(args.export).expanduser().resolve()
     mapping_path = Path(args.mapping).expanduser().resolve()
@@ -239,6 +314,7 @@ def main():
         output_path=output_path,
         sheet_name=args.sheet,
         inplace=args.inplace,
+        cutoff_date=cutoff_date,  
         drop_original_titles=drop_original_titles,
         date_columns=date_columns,
     )

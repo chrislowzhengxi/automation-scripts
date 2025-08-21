@@ -206,10 +206,10 @@ def group_export_by_account(
         summary = df_tmp[code_mask & uncleared_mask & age_mask].copy()
 
         if not summary.empty:
-            title = "預付費用>30天未報銷"
+            title = "說明"
             if title in wb.sheetnames:
                 del wb[title]
-            ws = wb.create_sheet(title=title)
+            ws = wb.create_sheet(title=title, index=0)
 
             # Use same B..X selection you already computed
             # (selected_cols comes from earlier; we reuse it)

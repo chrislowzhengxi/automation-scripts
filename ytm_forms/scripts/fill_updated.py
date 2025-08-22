@@ -388,20 +388,37 @@ def main():
     parser.add_argument("--task", required=True,
                         choices=["copy_4_3", "copy_2_3", "both"],
                         help="Which sheet(s) to fill.")
-    parser.add_argument("--src-43", default=r"C:\Users\TP2507088\Downloads\Automation\ytm_forms\data\template\關係人\export_關係人交易-應收帳款.xlsx",
-                        help="Source workbook for 4-3 (columns B:X).")
-    parser.add_argument("--src-23", default=r"C:\Users\TP2507088\Downloads\Automation\ytm_forms\data\template\關係人\export_關係人交易-收入.xlsx",
-                        help="Source workbook for 2-3 (columns A:AJ).")
+    parser.add_argument("--src-43", help="Source workbook for 4-3 (columns B:X).")
+    parser.add_argument("--src-23", help="Source workbook for 2-3 (columns A:AJ).")
+    # parser.add_argument("--src-43", default=r"C:\Users\TP2507088\Downloads\Automation\ytm_forms\data\template\關係人\export_關係人交易-應收帳款.xlsx",
+    #                     help="Source workbook for 4-3 (columns B:X).")
+    # parser.add_argument("--src-23", default=r"C:\Users\TP2507088\Downloads\Automation\ytm_forms\data\template\關係人\export_關係人交易-收入.xlsx",
+    #                     help="Source workbook for 2-3 (columns A:AJ).")
 
     # NEW: external lookups
     parser.add_argument("--period", required=True, help="e.g., 202504")
-    parser.add_argument("--rates-path",
-                        help="External rates workbook path; overrides default pattern: <period> Ending 及 Avg (資通版本).xls")
-    parser.add_argument("--relparty-path",
-                        default=r"C:\Users\TP2507088\Downloads\Automation\ytm_forms\data\template\關係人\關係企業(人).xls",
-                        help="External related-party master workbook path (default: 關係企業(人).xls)")
+    # parser.add_argument("--rates-path",
+    #                     help="External rates workbook path; overrides default pattern: <period> Ending 及 Avg (資通版本).xls")
+    # parser.add_argument("--relparty-path",
+    #                     default=r"C:\Users\TP2507088\Downloads\Automation\ytm_forms\data\template\關係人\關係企業(人).xls",
+    #                     help="External related-party master workbook path (default: 關係企業(人).xls)")
+    parser.add_argument("--rates-path", help="External rates workbook path; overrides default pattern.")
+    parser.add_argument("--relparty-path", help="External related-party master workbook path.")
 
     args = parser.parse_args()
+    # Base folder inside the repo
+    BASE_TPL = PROJECT_ROOT / "ytm_forms" / "data" / "template" / "關係人"
+
+    # Resolve sources (allow override via CLI)
+    src_43 = Path(args.src_43) if args.src_43 else BASE_TPL / "export_關係人交易-應收帳款.xlsx"
+    src_23 = Path(args.src_23) if args.src_23 else BASE_TPL / "export_關係人交易-收入.xlsx"
+
+    # Resolve external files (allow override via CLI)
+    yyyymm = args.period
+    default_rates = BASE_TPL / f"{yyyymm} Ending 及 Avg (資通版本).xls"
+    rates_path   = Path(args.rates_path) if args.rates_path else default_rates
+    relparty_path = Path(args.relparty_path) if args.relparty_path else (BASE_TPL / "關係企業(人).xls")
+
 
     # validate template
     template_path = Path(args.template)
@@ -414,19 +431,10 @@ def main():
     )
     final_out = load_output_from_template(template_path, out_path, args.inplace)
 
-    # do the copy tasks
     if args.task in ("copy_4_3", "both"):
-        copy_43(template_path, Path(args.src_43), final_out)
+        copy_43(template_path, src_43, final_out)
     if args.task in ("copy_2_3", "both"):
-        copy_23(template_path, Path(args.src_23), final_out)
-
-    # build external workbook paths for append step
-    yyyymm = args.period
-    default_rates = Path(
-        rf"C:\Users\TP2507088\Downloads\Automation\ytm_forms\data\template\關係人\{yyyymm} Ending 及 Avg (資通版本).xls"
-    )
-    rates_path = Path(args.rates_path) if args.rates_path else default_rates
-    relparty_path = Path(args.relparty_path)
+        copy_23(template_path, src_23, final_out)
 
     # warnings if links missing (optional)
     if not rates_path.exists():

@@ -86,6 +86,46 @@ def default_export_path(explicit: str | None) -> Path:
     return p
 
 
+def quote_sheet(name: str) -> str:
+    # always quote sheet names for safety
+    return f"'{name}'" if not (name.startswith("'") and name.endswith("'")) else name
+
+def build_ext_vlookup(path: Path, sheet: str, table_range: str, key_ref: str, col_index: int) -> str:
+    # 'C:\...\[file.xls]Sheet'!$B:$C  → VLOOKUP(key, that, col_index, FALSE)
+    book = f"[{path.name}]"
+    sheet_quoted = quote_sheet(sheet)
+    xref = f"'{str(path.parent)}\\{book}{sheet_quoted[1:-1]}'!{table_range}"
+    return f"VLOOKUP({key_ref},{xref},{col_index},FALSE)"
+
+def copy_header_style(ws, src_col_idx: int, dst_col_idx: int):
+    s = ws.cell(row=1, column=src_col_idx)
+    d = ws.cell(row=1, column=dst_col_idx)
+    d.value = s.value  # temp; caller will overwrite with new header text
+    d.number_format = s.number_format
+    from copy import copy as _cpy
+    d.font = _cpy(s.font); d.fill = _cpy(s.fill); d.border = _cpy(s.border)
+    d.alignment = _cpy(s.alignment); d.protection = _cpy(s.protection)
+    # copy column width
+    try:
+        from openpyxl.utils import get_column_letter
+        dst_letter = get_column_letter(dst_col_idx)
+        src_letter = get_column_letter(src_col_idx)
+        ws.column_dimensions[dst_letter].width = ws.column_dimensions[src_letter].width
+    except Exception:
+        pass
+
+def copy_body_style_from_left(ws, row: int, col_idx: int):
+    # style like the immediate left neighbor (common pattern in your sheets)
+    if col_idx <= 1: 
+        return
+    s = ws.cell(row=row, column=col_idx - 1)
+    d = ws.cell(row=row, column=col_idx)
+    from copy import copy as _cpy
+    d.number_format = s.number_format
+    d.font = _cpy(s.font); d.fill = _cpy(s.fill); d.border = _cpy(s.border)
+    d.alignment = _cpy(s.alignment); d.protection = _cpy(s.protection)
+
+
 # ---------- task: MRS0014 → 2-2 ----------
 def run_mrs0014(template_path: Path, period: str, mrs_path: str | None, out_path: Path):
     mrs_file = pick_file_by_period("MRS0014", period, mrs_path)

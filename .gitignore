@@ -1,4 +1,5 @@
 # Python
+*.log
 __pycache__/
 *.pyc
 
@@ -19,6 +20,15 @@ log.txt
 # Ignore all Excel files by default
 *.xlsx
 *.xlsm
+*.xlsb
+~$*
+
+# Ignore all Excel output files
+ytm_forms/output/
+
+# Exception: allow tracked templates
+!ytm_forms/template/*.xlsx
+!ytm_forms/template/*.xls
 
 # But keep the master workbook
 !fourth/export-科餘-1000-asset.xlsx

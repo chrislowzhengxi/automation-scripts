@@ -83,33 +83,6 @@ def to_date_value(v):
     except Exception:
         return v
 
-# def copy_header_style(src_ws, src_col_indexes: list[int], dst_ws):
-#     """
-#     Copy header cell style from src_ws row=1 columns (by numeric index),
-#     and apply to dst_ws row=1 1..N.
-#     """
-#     for j, src_col_idx in enumerate(src_col_indexes, start=1):
-#         src_cell = src_ws.cell(row=1, column=src_col_idx)
-#         dst_cell = dst_ws.cell(row=1, column=j)
-
-#         # Style pieces
-#         if src_cell.has_style:
-#             dst_cell.font = copy_style(src_cell.font)
-#             dst_cell.fill = copy_style(src_cell.fill)
-#             dst_cell.border = copy_style(src_cell.border)
-#             dst_cell.alignment = copy_style(src_cell.alignment)
-#             dst_cell.number_format = src_cell.number_format
-#             dst_cell.protection = copy_style(src_cell.protection)
-#         # also copy column width-ish by setting width from source column
-#         try:
-#             src_letter = openpyxl.utils.get_column_letter(src_col_idx)
-#             dst_letter = openpyxl.utils.get_column_letter(j)
-#             width = src_ws.column_dimensions[src_letter].width
-#             if width:
-#                 dst_ws.column_dimensions[dst_letter].width = width
-#         except Exception:
-#             pass
-
 
 def copy_header_style(src_ws, src_col_indexes: list[int], dst_ws, dst_row: int = 1):
     """
@@ -287,6 +260,108 @@ def group_export_by_account(
                     for r in range(start_row + 1, start_row + 1 + len(sub)):
                         ws.cell(row=r, column=cidx).number_format = "m/d/yyyy"
 
+
+    # ==== Step 5 (append to 說明): >90天 其他應收/其他應付/代收/代付款 ====
+
+    DATE_COL = "過帳日期"
+    UNCLEARED_COL = "結清文件"
+
+    RECEIVABLE_CODES = {
+        "11780100",  # 其他應收款-非聯屬公司
+        "11780200",  # 其他應收款-其他
+        "11880100",  # 其他應收款-聯屬公司
+    }
+    PAYABLE_CODES = {
+        "21710100",  # 應付薪資
+        "21710200",  # 應付獎金
+        "21710500",  # 暫估應付薪資
+        "21720100",  # 應付租金
+        "21740100",  # 暫估應付費用
+        "21780101",  # 應付費用-非聯屬
+        "21780102",  # 應付費用-聯屬
+        "21780300",  # 應付勞務
+        "21900202",  # 其他應付費用-聯屬
+        "22280201",  # 其他應付費用-非聯屬
+    }
+    COLLECTION_PAYMENT_CODES = {
+        "22820100",  # 代扣稅款
+        "22820200",  # 其他代收款
+        "22820205",  # 其他代收款-代扣五险一金
+        "12820100",  # 代付款
+    }
+
+    # Only run if columns exist
+    missing_cols_90 = [c for c in [DATE_COL, UNCLEARED_COL, gl_col] if c not in df_export.columns]
+    if not missing_cols_90:
+        # Build or reuse df_tmp with helper columns
+        if "df_tmp" not in locals():
+            df_tmp = df_export.copy()
+        if "_posting_date" not in df_tmp.columns:
+            dt = pd.to_datetime(df_tmp[DATE_COL], errors="coerce")
+            df_tmp["_posting_date"] = dt.dt.date
+        if "_code" not in df_tmp.columns:
+            df_tmp["_code"] = df_tmp[gl_col].apply(norm_code)
+
+        co = cutoff_date or date.today()
+        uncleared_mask = df_tmp[UNCLEARED_COL].isna() | (df_tmp[UNCLEARED_COL].astype(str).str.strip() == "")
+        age90_mask = df_tmp["_posting_date"].notna() & (
+            (pd.to_datetime(co) - pd.to_datetime(df_tmp["_posting_date"])).dt.days > 90
+        )
+
+        # Start appending to the same 說明 sheet: 2 blank rows after previous content
+        row_ptr = ws.max_row + 2
+
+        # Top-level title
+        ws.cell(row=row_ptr, column=1, value="5. 超過90天之其他應收/其他應付/代收/代付款原因。")
+        row_ptr += 2  # one blank row before first subsection
+
+        def write_section_inline(ws_, start_row: int, section_title: str, codes: set[str]) -> int:
+            """
+            Writes a subsection inside 說明 at start_row.
+            Returns the next row index after the subsection plus one blank line.
+            """
+            # Subsection title
+            ws_.cell(row=start_row, column=1, value=f"— {section_title}")
+            # Filter rows
+            code_mask = df_tmp["_code"].isin(codes)
+            sub = df_tmp[uncleared_mask & age90_mask & code_mask].copy()
+
+            # If empty → write '無 ...'
+            if sub.empty:
+                ws_.cell(row=start_row + 1, column=1, value=f"無 {section_title}")
+                return start_row + 2 + 1  # (title + line) then +1 blank row
+
+            # If not empty → one blank row, then header + data
+            hdr_row = start_row + 2
+            for j, col_name in enumerate(selected_cols, start=1):
+                ws_.cell(row=hdr_row, column=j, value=str(col_name))
+            copy_header_style(src_ws, [df_export.columns.get_loc(c) + 1 for c in selected_cols], ws_, dst_row=hdr_row)
+
+            # Data
+            DATE_COLS = {"文件日期", "過帳日期"}
+            header_to_idx = {h: idx + 1 for idx, h in enumerate(selected_cols)}
+            r = hdr_row + 1
+            for row_vals in sub[selected_cols].itertuples(index=False, name=None):
+                for j, val in enumerate(row_vals, start=1):
+                    header = selected_cols[j - 1]
+                    v = to_date_value(val) if header in DATE_COLS else val
+                    ws_.cell(row=r, column=j, value=v)
+                r += 1
+
+            # Date format
+            for h in DATE_COLS:
+                if h in header_to_idx:
+                    cidx = header_to_idx[h]
+                    for rr in range(hdr_row + 1, r):
+                        ws_.cell(row=rr, column=cidx).number_format = "m/d/yyyy"
+
+            # One blank row after the block
+            return r + 1
+
+        # Sections with ONE blank row between them
+        row_ptr = write_section_inline(ws, row_ptr, "超過90天其他應收未沖帳明細", RECEIVABLE_CODES)
+        row_ptr = write_section_inline(ws, row_ptr, "超過90天其他應付費用未沖帳明細", PAYABLE_CODES)
+        row_ptr = write_section_inline(ws, row_ptr, "超過90天其他代收/代付款未沖帳明細", COLLECTION_PAYMENT_CODES)
 
 
     # 7) remove original sheets in the OUTPUT (not touching your source file if you chose a new file)

@@ -41,3 +41,7 @@ ytm_forms/output/
 
 # (optional) ignore other archives/outputs
 *.zip
+
+
+bank_reconciliation/skipped.csv
+ytm_forms/data/template/*export_*.xlsx

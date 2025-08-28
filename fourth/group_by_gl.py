@@ -418,6 +418,65 @@ def group_export_by_account(
         row_ptr = write_section_inline(ws, row_ptr, "超過90天其他應付費用未沖帳明細", PAYABLE_CODES)
         row_ptr = write_section_inline(ws, row_ptr, "超過90天其他代收/代付款未沖帳明細", COLLECTION_PAYMENT_CODES)
 
+    # ==== Step 6 (append to 說明): >30天 暫付款/暫收款 未能結清 ====
+    # Reuse df_tmp, selected_cols, src_ws, etc. in current scope.
+
+    ADVANCE_PAY_CODES = {"12810100", "12810200"}   # 暫付款
+    ADVANCE_REC_CODES = {"22810100", "22810200"}   # 暫收款
+
+    # Build 30-day mask
+    age30_mask = df_tmp["_posting_date"].notna() & (
+        (pd.to_datetime(co) - pd.to_datetime(df_tmp["_posting_date"])).dt.days > 30
+    )
+
+    # Start area (2 blank rows after whatever is already on 說明)
+    row_ptr = ws.max_row + 2
+    ws.cell(row=row_ptr, column=1, value="6. 超過30天暫付款/暫收款未能結清的合理性。")
+    row_ptr += 2  # one blank row before first subsection
+
+    def write_section_30(ws_, start_row: int, section_title: str, codes: set[str]) -> int:
+        """
+        Writes a subsection for 30-day 未結清 with given codes at start_row.
+        Returns next row index after the block + one blank line.
+        """
+        ws_.cell(row=start_row, column=1, value=f"→{section_title}：")
+        code_mask = df_tmp["_code"].isin(codes)
+        sub = df_tmp[uncleared_mask & age30_mask & code_mask].copy()
+
+        if sub.empty:
+            ws_.cell(row=start_row + 1, column=1, value=f"無 {section_title}")
+            return start_row + 2 + 1  # title + line, then 1 blank
+
+        hdr_row = start_row + 1
+        # Header
+        for j, col_name in enumerate(selected_cols, start=1):
+            ws_.cell(row=hdr_row, column=j, value=str(col_name))
+        copy_header_style(src_ws, [df_export.columns.get_loc(c) + 1 for c in selected_cols], ws_, dst_row=hdr_row)
+
+        # Data
+        DATE_COLS = {"文件日期", "過帳日期"}
+        header_to_idx = {h: idx + 1 for idx, h in enumerate(selected_cols)}
+        r = hdr_row + 1
+        for row_vals in sub[selected_cols].itertuples(index=False, name=None):
+            for j, val in enumerate(row_vals, start=1):
+                header = selected_cols[j - 1]
+                v = to_date_value(val) if header in DATE_COLS else val
+                ws_.cell(row=r, column=j, value=v)
+            r += 1
+
+        # Date format
+        for h in DATE_COLS:
+            if h in header_to_idx:
+                cidx = header_to_idx[h]
+                for rr in range(hdr_row + 1, r):
+                    ws_.cell(row=rr, column=cidx).number_format = "m/d/yyyy"
+
+        return r + 1  # one blank row after the block
+
+    # Two subsections: 暫付款 / 暫收款
+    row_ptr = write_section_30(ws, row_ptr, "超過30天 暫付款未沖帳明細", ADVANCE_PAY_CODES)
+    row_ptr = write_section_30(ws, row_ptr, "超過30天 暫收款未沖帳明細", ADVANCE_REC_CODES)
+
 
     # 7) remove original sheets in the OUTPUT (not touching your source file if you chose a new file)
     #    We will always save to output_path; if not inplace, that's a different file.

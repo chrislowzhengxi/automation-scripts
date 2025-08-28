@@ -10,6 +10,7 @@ import sys
 import pandas as pd
 import openpyxl
 from datetime import datetime, date
+from openpyxl.utils import get_column_letter
 
 # ---------------- helpers ----------------
 
@@ -108,6 +109,56 @@ def copy_header_style(src_ws, src_col_indexes: list[int], dst_ws, dst_row: int =
                 dst_ws.column_dimensions[dst_letter].width = width
         except Exception:
             pass
+
+def _safe_col(ws, idx: int) -> str | None:
+    """Return Excel letter for idx if it exists on the sheet, else None."""
+    if idx <= 0 or idx > ws.max_column:
+        return None
+    return get_column_letter(idx)
+
+def _group_cols(ws, start_idx: int, end_idx: int, hidden=True, outline_level=1):
+    """Group columns if they exist (inclusive)."""
+    start_letter = _safe_col(ws, start_idx)
+    end_letter   = _safe_col(ws, end_idx)
+    if start_letter and end_letter:
+        ws.column_dimensions.group(start=start_letter, end=end_letter,
+                                   outline_level=outline_level, hidden=hidden)
+        # make sure outline symbols are visible
+        ws.sheet_properties.outlinePr.summaryBelow = True
+        ws.sheet_view.showOutlineSymbols = True
+
+def _apply_common_sheet_format(ws):
+    """Freeze top row + enable filter on the whole used range."""
+    # Freeze first row
+    ws.freeze_panes = "A2"
+    # AutoFilter over the full used range
+    last_col = get_column_letter(ws.max_column or 1)
+    last_row = ws.max_row or 1
+    ws.auto_filter.ref = f"A1:{last_col}{last_row}"
+
+def _format_column_N(ws):
+    """Number format for column N: #,##0;[Red](#,##0) on data rows (row ≥ 2)."""
+    if ws.max_column < 14:
+        return
+    fmt = '#,##0;[Red](#,##0)'
+    for r in range(2, ws.max_row + 1):
+        ws.cell(row=r, column=14).number_format = fmt
+
+def _apply_groupings(ws):
+    """
+    Group columns with outline (+/−):
+      A–B, D–E, G, K–L, U–W (best-effort if sheet has fewer columns).
+    """
+    # A–B
+    _group_cols(ws, 1, 2, hidden=True)
+    # D–E
+    _group_cols(ws, 4, 5, hidden=True)
+    # G (single column)
+    _group_cols(ws, 7, 7, hidden=True)
+    # K–L
+    _group_cols(ws, 11, 12, hidden=True)
+    # U–W (21–23). Will silently skip if not present.
+    _group_cols(ws, 21, 23, hidden=True)
 # ---------------- core ----------------
 
 def group_export_by_account(
@@ -172,6 +223,10 @@ def group_export_by_account(
                     ws.cell(row=i, column=j).number_format = "m/d/yyyy"
                 else:
                     ws.cell(row=i, column=j, value=val)
+        
+        _apply_common_sheet_format(ws)
+        _apply_groupings(ws)
+        _format_column_N(ws)
 
     # ---- Build the “>30 days 未報銷 (未結清)” summary for 預付費用 ----
     TARGET_CODES = {"12580100", "12680100"}    # 預付費用 + 其他預付款

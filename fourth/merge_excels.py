@@ -5,6 +5,10 @@ from pathlib import Path
 import pandas as pd
 
 
+from group_by_gl import group_export_by_account, choose_output_path
+import datetime
+
+
 from pathlib import Path
 import pandas as pd
 
@@ -162,6 +166,27 @@ def main_cli():
 
     print(f"✅ Merged {len(inputs)} files → {out_path}")
 
+    # === Immediately run grouping ===
+    mapping_path = Path("會計科目對照表.xlsx")  # adjust path if needed
+    output_path = out_path.with_name(out_path.stem + "_grouped.xlsx")
+
+    stats = group_export_by_account(
+        export_path=out_path,
+        mapping_path=mapping_path,
+        output_path=output_path,
+        sheet_name=None,
+        inplace=False,
+        drop_original_titles=["Sheet1","Sheet2","Sheet3"],
+        date_columns=["文件日期","過帳日期"],
+        cutoff_date=datetime.date.today()
+    )
+
+    print(f"✅ Grouped output written to {output_path}")
+    for k, v in stats.items():
+        print(f"- {k}: {v}")
+
+
+
 def run_gui():
     import tkinter as tk
     from tkinter import filedialog, messagebox
@@ -228,6 +253,26 @@ def run_gui():
             with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
                 merged.to_excel(writer, index=False, sheet_name="Sheet1")
 
+
+            # === Immediately run group_by_gl.py on merged file ===
+            from group_by_gl import group_export_by_account
+            import datetime
+
+            mapping_path = Path("會計科目對照表.xlsx")  # adjust path if needed
+            output_path = out_path.with_name(out_path.stem + "_grouped.xlsx")
+
+            stats = group_export_by_account(
+                export_path=out_path,
+                mapping_path=mapping_path,
+                output_path=output_path,
+                sheet_name=None,
+                inplace=False,
+                drop_original_titles=["Sheet1", "Sheet2", "Sheet3"],
+                date_columns=["文件日期", "過帳日期"],
+                cutoff_date=datetime.date.today()
+            )
+
+
             # Nice feedback: show how many went in and how many rows came out
             import tkinter
             messagebox.showinfo(
@@ -266,6 +311,7 @@ def run_gui():
     tk.Button(frm, text="Close", command=root.destroy).grid(row=7, column=1, pady=12, sticky="w")
 
     root.mainloop()
+
 
 if __name__ == "__main__":
     main_cli()

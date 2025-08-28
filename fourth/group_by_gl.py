@@ -478,6 +478,25 @@ def group_export_by_account(
     row_ptr = write_section_30(ws, row_ptr, "超過30天 暫收款未沖帳明細", ADVANCE_REC_CODES)
 
 
+    # === Format columns L and N in 說明 (if they exist) ===
+    NUMBER_FMT = '#,##0;[Red](#,##0)'
+
+    col_indexes = []
+    for target_col in ["L", "N"]:
+        try:
+            idx = openpyxl.utils.column_index_from_string(target_col)
+            if idx <= ws.max_column:  # only if column exists
+                col_indexes.append(idx)
+        except Exception:
+            continue
+
+    for cidx in col_indexes:
+        for r in range(2, ws.max_row + 1):  # skip header row
+            cell = ws.cell(row=r, column=cidx)
+            # only format if numeric
+            if isinstance(cell.value, (int, float)):
+                cell.number_format = NUMBER_FMT
+
     # 7) remove original sheets in the OUTPUT (not touching your source file if you chose a new file)
     #    We will always save to output_path; if not inplace, that's a different file.
     #    Either way, we delete the listed titles if present.

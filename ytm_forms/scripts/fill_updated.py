@@ -8,6 +8,7 @@ from openpyxl.utils import column_index_from_string, get_column_letter
 import re
 from datetime import datetime
 from copy import copy as copy_style
+from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.cell_range import CellRange
 
 # Base = ytm_forms/
@@ -133,7 +134,7 @@ def _prev_ym(ym: str) -> str:
     y2, m2 = (y - 1, 12) if m == 1 else (y, m - 1)
     return f"{y2}/{m2:02d}"
 
-def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: str = None):
+def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: str = None, rptis10_path: Path = None):
     """
     Structure-only (safe & period-driven):
       - new_month = --period (YYYY/MM)
@@ -235,6 +236,157 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
 
     # Finally set B1 to the new month
     ws.cell(1, 2).value = new_month
+
+    # --- Delete column I (was redundant before we aligned block width to 9) ---
+    ws.delete_cols(9)
+    
+
+    for col in range(1, ws.max_column + 1):
+        max_length = 0
+        col_letter = get_column_letter(col)
+        for row in range(1, max_row + 1):
+            val = ws.cell(row, col).value
+            if val is not None:
+                val = str(val)
+                if len(val) > max_length:
+                    max_length = len(val)
+        # add a little padding
+        ws.column_dimensions[col_letter].width = max_length + 2
+
+    # --- Column C formulas (差異值) for new month block (A–H) ---
+    row = 4
+    start_row = None
+    while True:
+        a_val = ws.cell(row, 1).value   # company ID
+        b_val = ws.cell(row, 2).value   # company name or 合計
+
+        if b_val is None:
+            break  # stop if blank row (safety)
+
+        if str(b_val).strip() == "合計":
+            # write SUM formula for the total row
+            if start_row is not None and row > start_row:
+                ws.cell(row, 3).value = f"=SUM(C{start_row}:C{row-1})"
+            break
+
+        # normal company row → E{r} - N{r}
+        ws.cell(row, 3).value = f"=E{row}-N{row}"
+        if start_row is None:
+            start_row = row
+        row += 1
+
+
+    # def _ext_ref_cell(p: Path, sheet: str, cell: str) -> str:
+    #     """
+    #     Build Excel external reference string.
+    #     Example: 'C:\dir\[file.xlsx]Sheet0'!$E$9
+    #     """
+    #     win_path = str(p.parent).replace("/", "\\")
+    #     return f"'[{p.name}]{sheet}'!${cell}" if not win_path else f"'{win_path}\\[{p.name}]{sheet}'!${cell}"
+    def _ext_ref_cell(p: Path, sheet: str, cell: str) -> str:
+        """
+        Build Excel external reference like:
+        ='[Workbook.xlsx]SheetName'!$B$9
+        (Let Excel manage the full path; this avoids unicode/space path edge cases.)
+        """
+        import re
+        m = re.match(r"([A-Za-z]+)(\d+)", cell)
+        if not m:
+            raise ValueError(f"Invalid cell ref: {cell}")
+        col, row = m.groups()
+        abs_cell = f"${col.upper()}${row}"
+
+        print(f"[RPTIS10] using sheet: {ext_sheet}  file: {rptis10_path}")
+        return f"'[{p.name}]{sheet}'!{abs_cell}"
+
+
+    # =========================
+    # Column D formulas: D = C / (external RPTIS10!$B$9)
+    # =========================
+    if rptis10_path is None:
+        raise ValueError("rptis10_path not provided")
+
+    # find the sheet name in the external workbook (use the first tab)
+    try:
+        _ext_wb = load_workbook(rptis10_path, read_only=True, data_only=True)
+        ext_sheet = _ext_wb.sheetnames[0]  # e.g., 'Sheet0'
+        _ext_wb.close()
+    except Exception:
+        # If we can't open it (permissions/locked/etc.), fall back to a sane default
+        ext_sheet = "Sheet0"
+
+    ext_b9 = _ext_ref_cell(rptis10_path, ext_sheet, "B9")
+    # Example ext_b9 ->  `'C:\...\關係人\[RPTIS10_I_A01_202504.xlsx]Sheet0'!$B$9`
+
+    # Walk company rows in the 2025/04 block (A–H), stop at first 「合計」
+    row = 4
+    start_row_d = None
+    while True:
+        b_val = ws.cell(row, 2).value  # company name / 「合計」
+        if b_val is None:
+            break
+        if str(b_val).strip() == "合計":
+            if start_row_d is not None and row > start_row_d:
+                ws.cell(row, 4).value = f"=SUM(D{start_row_d}:D{row-1})"
+            break
+
+        # D = C / external B9
+        ws.cell(row, 4).value = f"=C{row}/{ext_b9}"
+        if start_row_d is None:
+            start_row_d = row
+        row += 1
+
+    # =========================
+    # Column E formulas:
+    #  E = -SUMIF('2-3.銷貨明細'!AJ:AJ, '<this sheet>'!A{r}, '2-3.銷貨明細'!AL:AL)
+    #  Stop at first 「合計」; on that row set SUM of E above.
+    # =========================
+    row = 4
+    start_row_e = None
+    while True:
+        b_val = ws.cell(row, 2).value  # col B
+        if b_val is None:
+            break
+        if str(b_val).strip() == "合計":
+            if start_row_e is not None and row > start_row_e:
+                ws.cell(row, 5).value = f"=SUM(E{start_row_e}:E{row-1})"
+            break
+
+        # E_r = -SUMIF('2-3.銷貨明細'!AJ:AJ, '<this sheet>'!A{r}, '2-3.銷貨明細'!AL:AL)
+        ws.cell(row, 5).value = (
+            f"=-SUMIF('2-3.銷貨明細'!AJ:AJ,'{sheet_name}'!A{row},'2-3.銷貨明細'!AL:AL)"
+        )
+
+        if start_row_e is None:
+            start_row_e = row
+        row += 1
+
+    # =========================
+    # Column F formulas:
+    #  F = E / (external RPTIS10!$E$9)
+    #  Stop at first 「合計」; on that row set SUM of F above.
+    # =========================
+    ext_e9 = _ext_ref_cell(rptis10_path, ext_sheet, "E9")
+
+    row = 4
+    start_row_f = None
+    while True:
+        b_val = ws.cell(row, 2).value  # col B
+        if b_val is None:
+            break
+        if str(b_val).strip() == "合計":
+            if start_row_f is not None and row > start_row_f:
+                ws.cell(row, 6).value = f"=SUM(F{start_row_f}:F{row-1})"
+            break
+
+        # F_r = E_r / external E9
+        ws.cell(row, 6).value = f"=E{row}/{ext_e9}"
+
+        if start_row_f is None:
+            start_row_f = row
+        row += 1
+
+
 
     return wb
 
@@ -396,41 +548,6 @@ def append_calc_columns_43(ws, period: str, rates_path: Path, relparty_map: dict
 
 
 
-# ---------- CLI ----------
-# def main():
-#     parser = argparse.ArgumentParser(description="Fill updated YTM forms by direct copy/paste with styles.")
-#     parser.add_argument("--template", required=True, help="Path to the template workbook (will be copied unless --inplace).")
-#     parser.add_argument("--out", help="Output path (.xlsx). If omitted, writes to default unless --inplace.")
-#     parser.add_argument("--inplace", action="store_true", help="Overwrite template in-place.")
-
-#     parser.add_argument("--task", required=True,
-#                         choices=["copy_4_3", "copy_2_3", "both"],
-#                         help="Which sheet(s) to fill.")
-#     parser.add_argument("--src-43", default=r"C:\Users\TP2507088\Downloads\Automation\ytm_forms\data\template\關係人\export_關係人交易-應收帳款.xlsx",
-#                         help="Source workbook for 4-3 (columns B:X).")
-#     parser.add_argument("--src-23", default=r"C:\Users\TP2507088\Downloads\Automation\ytm_forms\data\template\關係人\export_關係人交易-收入.xlsx",
-#                         help="Source workbook for 2-3 (columns A:AJ).")
-
-#     args = parser.parse_args()
-
-#     template_path = Path(args.template)
-#     if not template_path.exists():
-#         raise FileNotFoundError(f"Template not found: {template_path}")
-
-#     out_path = Path(args.out) if args.out else (
-#     template_path if args.inplace else OUTPUT_DIR / f"copy_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-#     )
-
-
-#     final_out = load_output_from_template(template_path, out_path, args.inplace)
-
-#     if args.task in ("copy_4_3", "both"):
-#         copy_43(template_path, Path(args.src_43), final_out)
-
-#     if args.task in ("copy_2_3", "both"):
-#         copy_23(template_path, Path(args.src_23), final_out)
-
-#     print(f"Done → {final_out}")
 
 # ---------- CLI ----------
 def main():
@@ -463,6 +580,10 @@ def main():
     #                     help="External related-party master workbook path (default: 關係企業(人).xls)")
     parser.add_argument("--rates-path", help="External rates workbook path; overrides default pattern.")
     parser.add_argument("--relparty-path", help="External related-party master workbook path.")
+    parser.add_argument(
+        "--rptis10-path",
+        help="External RPTIS10 workbook path. Defaults to .../ytm_forms/data/template/關係人/RPTIS10_I_A01_<period>.xlsx"
+    )
 
     args = parser.parse_args()
     # Base folder inside the repo
@@ -496,8 +617,12 @@ def main():
         copy_23(template_path, src_23, final_out)
     
     # structure-only step for 1-1.公告(元) (no formulas yet)
+    rptis10_path = Path(args.rptis10_path) if args.rptis10_path else (
+        BASE_TPL / f"RPTIS10_I_A01_{args.period}.xlsx"
+    )
+
     if args.task in ("announce_structure", "all"):
-        wb_tmp = prepare_month_structure(final_out, sheet_name=args.announce_sheet, period_yyyymm=args.period)
+        wb_tmp = prepare_month_structure(final_out, sheet_name=args.announce_sheet, period_yyyymm=args.period, rptis10_path=rptis10_path)
         wb_tmp.save(final_out)
         wb_tmp.close()
 

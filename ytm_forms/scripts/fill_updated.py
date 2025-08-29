@@ -194,43 +194,6 @@ def last_data_row(ws, key_col=1, max_gap=100):
     # if nothing found, still return 1 so headers can exist
     return max(seen, 1)
 
-# def append_calc_columns_23(ws, period: str, rates_path: Path, relparty_path: Path):
-#     """
-#     Sheet: 2-3.銷貨明細
-#     Existing data pasted to A:AJ → we append:
-#       AK: 匯率
-#       AL: 換算台幣
-#       AM: 關係企業名稱
-#     Formulas (external workbooks):
-#       匯率           = IF(N2="NTD",1, VLOOKUP(N2, [rates]Summary!$B:$C, 2, FALSE))
-#       換算台幣       = M2*AK2
-#       關係企業名稱   = VLOOKUP(AJ2, [relparty]Sheet1!$A:$C, 3, FALSE)
-#     """
-#     from openpyxl.utils import column_index_from_string as colidx
-#     AK, AL, AM = colidx("AK"), colidx("AL"), colidx("AM")
-#     N, M, AJ = colidx("N"), colidx("M"), colidx("AJ")
-
-#     # header styles copied from previous header (AJ)
-#     copy_header_style(ws, AJ, AK); ws.cell(row=1, column=AK).value = "匯率"
-#     copy_header_style(ws, AJ, AL); ws.cell(row=1, column=AL).value = "換算台幣"
-#     copy_header_style(ws, AJ, AM); ws.cell(row=1, column=AM).value = "關係企業名稱"
-
-#     lr = last_data_row(ws, key_col=1)
-
-#     rates_vlk = lambda r: f"IF({ws.cell(row=r, column=N).coordinate}=\"NTD\",1," + \
-#         build_ext_vlookup(rates_path, "Summary", "$B:$C", ws.cell(row=r, column=N).coordinate, 2) + ")"
-#     rel_vlk   = lambda r: build_ext_vlookup(relparty_path, "Sheet1", "$A:$C", ws.cell(row=r, column=AJ).coordinate, 3)
-
-#     for r in range(2, lr + 1):
-#         # 匯率
-#         copy_body_style_from_left(ws, r, AK)
-#         ws.cell(row=r, column=AK).value = f"={rates_vlk(r)}"
-#         # 換算台幣
-#         copy_body_style_from_left(ws, r, AL)
-#         ws.cell(row=r, column=AL).value = f"={ws.cell(row=r, column=M).coordinate}*{ws.cell(row=r, column=AK).coordinate}"
-#         # 關係企業名稱
-#         copy_body_style_from_left(ws, r, AM)
-#         ws.cell(row=r, column=AM).value = f"={rel_vlk(r)}"
 
 def append_calc_columns_23(ws, period: str, rates_path: Path, relparty_map: dict):
     from openpyxl.utils import column_index_from_string as colidx

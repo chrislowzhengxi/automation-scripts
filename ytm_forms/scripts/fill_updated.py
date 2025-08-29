@@ -5,7 +5,10 @@ from pathlib import Path
 from copy import copy
 from openpyxl import load_workbook
 from openpyxl.utils import column_index_from_string, get_column_letter
-
+import re
+from datetime import datetime
+from copy import copy as copy_style
+from openpyxl.worksheet.cell_range import CellRange
 
 # Base = ytm_forms/
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -107,6 +110,133 @@ def copy_body_style_from_left(ws, row: int, col_idx: int):
     d.number_format = s.number_format
     d.font = _cpy(s.font); d.fill = _cpy(s.fill); d.border = _cpy(s.border)
     d.alignment = _cpy(s.alignment); d.protection = _cpy(s.protection)
+
+
+
+BLOCK_W = 9            # A–I
+SPACER_COL = "J"       # width = 1
+SHEET_NAME = "1-1.公告(元)"
+
+def _find_month_header_col(ws, header_row=1):
+    """Find the leftmost cell in header_row that looks like YYYY/MM."""
+    for c in range(1, ws.max_column + 1):
+        v = ws.cell(header_row, c).value
+        if isinstance(v, str) and re.fullmatch(r"\d{4}/\d{2}", v):
+            return c
+    raise RuntimeError("Couldn't locate a YYYY/MM header in row 1.")
+
+def _ym_from_period(yyyymm: str) -> str:
+    return f"{yyyymm[:4]}/{yyyymm[4:]}"
+
+def _prev_ym(ym: str) -> str:
+    y, m = map(int, ym.split("/"))
+    y2, m2 = (y - 1, 12) if m == 1 else (y, m - 1)
+    return f"{y2}/{m2:02d}"
+
+def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: str = None):
+    """
+    Structure-only (safe & period-driven):
+      - new_month = --period (YYYY/MM)
+      - prev_month = month before --period
+      - If K1 has a YYYY/MM, it must equal prev_month (subsequent runs) → snapshot K–S
+      - Else (first run), B1 must equal prev_month → snapshot A–I and ALSO write that snapshot to K–S
+      - Write snapshot to A–I (new month block)
+      - Set J as thin spacer and set B1 = new_month
+    """
+    if not period_yyyymm:
+        raise ValueError("prepare_month_structure requires period_yyyymm (e.g., '202504').")
+
+    new_month = _ym_from_period(period_yyyymm)  # "2025/04"
+    prev_month = _prev_ym(new_month)            # "2025/03"
+
+    wb = load_workbook(wb_or_path) if isinstance(wb_or_path, (str, Path)) else wb_or_path
+    ws = wb[sheet_name]
+
+    max_row = ws.max_row
+    width   = BLOCK_W  # 9
+
+    B1 = ws.cell(1, 2).value    # month header (expected prev_month or new_month)
+    K1 = ws.cell(1, 11).value   # col K = 11 (if already shifted before)
+
+    # Decide where the "previous month" currently lives and sanity-check it.
+    if isinstance(K1, str) and re.fullmatch(r"\d{4}/\d{2}", K1):
+        if K1 != prev_month:
+            raise ValueError(f"[安全保護] 期望 K1='{prev_month}', 但目前是 '{K1}'.")
+        prev_col = 11  # K
+        need_write_prev_to_K = False
+    else:
+        if B1 != prev_month:
+            raise ValueError(f"[安全保護] 期望 B1='{prev_month}', 但目前是 '{B1}'.")
+        prev_col = 1   # A
+        need_write_prev_to_K = True
+
+    # Snapshot function
+    def snapshot(col0):
+        data, merges, col_widths, row_heights = [], [], [], {}
+        for r in range(1, max_row + 1):
+            row = []
+            for i in range(width):
+                c = ws.cell(r, col0 + i)
+                row.append((c.value, c.font, c.fill, c.border, c.alignment,
+                            c.number_format, c.protection))
+            data.append(row)
+        for mr in list(ws.merged_cells.ranges):
+            c1, r1, c2, r2 = mr.bounds
+            if col0 <= c1 and c2 <= col0 + width - 1:
+                merges.append((r1, r2, c1 - col0, c2 - col0))
+        for i in range(width):
+            letter = get_column_letter(col0 + i)
+            dim = ws.column_dimensions.get(letter)
+            col_widths.append(dim.width if dim and dim.width is not None else None)
+        for r, dim in ws.row_dimensions.items():
+            if 1 <= r <= max_row and dim.height is not None:
+                row_heights[r] = dim.height
+        return (data, merges, col_widths, row_heights)
+
+    # Restore function
+    def restore(col0, snap):
+        data, merges, col_widths, row_heights = snap
+        for r in range(1, max_row + 1):
+            for i in range(width):
+                v, fnt, fill, brd, alg, numfmt, prot = data[r - 1][i]
+                dc = ws.cell(r, col0 + i)
+                dc.value = v
+                dc.font = copy_style(fnt); dc.fill = copy_style(fill)
+                dc.border = copy_style(brd); dc.alignment = copy_style(alg)
+                dc.number_format = numfmt; dc.protection = copy_style(prot)
+        for i, w in enumerate(col_widths):
+            if w is not None:
+                letter = get_column_letter(col0 + i)
+                ws.column_dimensions[letter].width = w
+        for r, h in row_heights.items():
+            ws.row_dimensions[r].height = h
+        for r1, r2, off1, off2 in merges:
+            ws.merge_cells(start_row=r1, end_row=r2,
+                           start_column=col0 + off1, end_column=col0 + off2)
+
+    snap = snapshot(prev_col)
+
+    # Write new month block A–I
+    restore(1, snap)
+
+    # Clear spacer J
+    for rng in list(ws.merged_cells.ranges):
+        c1, r1, c2, r2 = rng.bounds
+        if c1 <= 10 <= c2:  # col J
+            ws.unmerge_cells(start_row=r1, end_row=r2,
+                             start_column=c1, end_column=c2)
+    ws.column_dimensions[SPACER_COL].width = 1.0
+    for r in range(1, max_row + 1):
+        ws.cell(r, 10).value = None  # clear J
+
+    # On first run, also materialize K–S
+    if need_write_prev_to_K:
+        restore(11, snap)
+
+    # Finally set B1 to the new month
+    ws.cell(1, 2).value = new_month
+
+    return wb
 
 
 # ---------- tasks ----------
@@ -229,45 +359,6 @@ def append_calc_columns_23(ws, period: str, rates_path: Path, relparty_map: dict
     apply_accounting_format(ws, AL, 2, lr)
 
 
-# def append_calc_columns_43(ws, period: str, rates_path: Path, relparty_path: Path):
-#     """
-#     Sheet: 4-3.應收關係人科餘
-#     Existing data pasted to A:W → we append:
-#       X: 匯率
-#       Y: 換算台幣
-#       Z: 關係企業名稱
-#     Formulas:
-#       匯率           = IF(K2="NTD",1, VLOOKUP(K2, [rates]Summary!$B:$C, 2, FALSE))
-#       換算台幣       = L2*X2
-#       關係企業名稱   = VLOOKUP(J2, [relparty]Sheet1!$A:$C, 3, FALSE)
-#     """
-#     from openpyxl.utils import column_index_from_string as colidx
-#     X, Y, Z = colidx("X"), colidx("Y"), colidx("Z")
-#     J, K, L = colidx("J"), colidx("K"), colidx("L")
-
-#     # header styles copied from previous header (W)
-#     from openpyxl.utils import column_index_from_string
-#     W = column_index_from_string("W")
-#     copy_header_style(ws, W, X); ws.cell(row=1, column=X).value = "匯率"
-#     copy_header_style(ws, W, Y); ws.cell(row=1, column=Y).value = "換算台幣"
-#     copy_header_style(ws, W, Z); ws.cell(row=1, column=Z).value = "關係企業名稱"
-
-#     lr = last_data_row(ws, key_col=1)
-
-#     rates_vlk = lambda r: f"IF({ws.cell(row=r, column=K).coordinate}=\"NTD\",1," + \
-#         build_ext_vlookup(rates_path, "Summary", "$B:$C", ws.cell(row=r, column=K).coordinate, 2) + ")"
-#     rel_vlk   = lambda r: build_ext_vlookup(relparty_path, "Sheet1", "$A:$C", ws.cell(row=r, column=J).coordinate, 3)
-
-#     for r in range(2, lr + 1):
-#         # 匯率
-#         copy_body_style_from_left(ws, r, X)
-#         ws.cell(row=r, column=X).value = f"={rates_vlk(r)}"
-#         # 換算台幣
-#         copy_body_style_from_left(ws, r, Y)
-#         ws.cell(row=r, column=Y).value = f"={ws.cell(row=r, column=L).coordinate}*{ws.cell(row=r, column=X).coordinate}"
-#         # 關係企業名稱
-#         copy_body_style_from_left(ws, r, Z)
-#         ws.cell(row=r, column=Z).value = f"={rel_vlk(r)}"
 
 
 def append_calc_columns_43(ws, period: str, rates_path: Path, relparty_map: dict):
@@ -348,9 +439,14 @@ def main():
     parser.add_argument("--out", help="Output path (.xlsx). If omitted, writes to default unless --inplace.")
     parser.add_argument("--inplace", action="store_true", help="Overwrite template in-place.")
 
+    parser.add_argument(
+        "--announce-sheet",
+        default="1-1.公告(元)",   # change default if you prefer the dotted one
+        help="Exact name of the sheet to update for 公告(月) structure."
+    )
     parser.add_argument("--task", required=True,
-                        choices=["copy_4_3", "copy_2_3", "both"],
-                        help="Which sheet(s) to fill.")
+                    choices=["copy_4_3", "copy_2_3", "both", "announce_structure", "all"],
+                    help="Which sheet(s) to fill.")
     parser.add_argument("--src-43", help="Source workbook for 4-3 (columns B:X).")
     parser.add_argument("--src-23", help="Source workbook for 2-3 (columns A:AJ).")
     # parser.add_argument("--src-43", default=r"C:\Users\TP2507088\Downloads\Automation\ytm_forms\data\template\關係人\export_關係人交易-應收帳款.xlsx",
@@ -394,10 +490,16 @@ def main():
     )
     final_out = load_output_from_template(template_path, out_path, args.inplace)
 
-    if args.task in ("copy_4_3", "both"):
+    if args.task in ("copy_4_3", "both", "all"):
         copy_43(template_path, src_43, final_out)
-    if args.task in ("copy_2_3", "both"):
+    if args.task in ("copy_2_3", "both", "all"):
         copy_23(template_path, src_23, final_out)
+    
+    # structure-only step for 1-1.公告(元) (no formulas yet)
+    if args.task in ("announce_structure", "all"):
+        wb_tmp = prepare_month_structure(final_out, sheet_name=args.announce_sheet, period_yyyymm=args.period)
+        wb_tmp.save(final_out)
+        wb_tmp.close()
 
     # warnings if links missing (optional)
     if not rates_path.exists():

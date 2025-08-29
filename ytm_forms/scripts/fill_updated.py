@@ -8,6 +8,7 @@ from openpyxl.utils import column_index_from_string, get_column_letter
 import re
 from datetime import datetime
 from copy import copy as copy_style
+from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.cell_range import CellRange
 
 # Base = ytm_forms/
@@ -235,6 +236,45 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
 
     # Finally set B1 to the new month
     ws.cell(1, 2).value = new_month
+
+    # --- Delete column I (was redundant before we aligned block width to 9) ---
+    ws.delete_cols(9)
+    
+
+    for col in range(1, ws.max_column + 1):
+        max_length = 0
+        col_letter = get_column_letter(col)
+        for row in range(1, max_row + 1):
+            val = ws.cell(row, col).value
+            if val is not None:
+                val = str(val)
+                if len(val) > max_length:
+                    max_length = len(val)
+        # add a little padding
+        ws.column_dimensions[col_letter].width = max_length + 2
+
+    # --- Column C formulas (差異值) for new month block (A–H) ---
+    row = 4
+    start_row = None
+    while True:
+        a_val = ws.cell(row, 1).value   # company ID
+        b_val = ws.cell(row, 2).value   # company name or 合計
+
+        if b_val is None:
+            break  # stop if blank row (safety)
+
+        if str(b_val).strip() == "合計":
+            # write SUM formula for the total row
+            if start_row is not None and row > start_row:
+                ws.cell(row, 3).value = f"=SUM(C{start_row}:C{row-1})"
+            break
+
+        # normal company row → E{r} - N{r}
+        ws.cell(row, 3).value = f"=E{row}-N{row}"
+        if start_row is None:
+            start_row = row
+        row += 1
+
 
     return wb
 

@@ -283,11 +283,26 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
     #     """
     #     win_path = str(p.parent).replace("/", "\\")
     #     return f"'[{p.name}]{sheet}'!${cell}" if not win_path else f"'{win_path}\\[{p.name}]{sheet}'!${cell}"
+    # def _ext_ref_cell(p: Path, sheet: str, cell: str) -> str:
+    #     """
+    #     Build Excel external reference like:
+    #     ='[Workbook.xlsx]SheetName'!$B$9
+    #     (Let Excel manage the full path; this avoids unicode/space path edge cases.)
+    #     """
+    #     import re
+    #     m = re.match(r"([A-Za-z]+)(\d+)", cell)
+    #     if not m:
+    #         raise ValueError(f"Invalid cell ref: {cell}")
+    #     col, row = m.groups()
+    #     abs_cell = f"${col.upper()}${row}"
+
+    #     print(f"[RPTIS10] using sheet: {ext_sheet}  file: {rptis10_path}")
+    #     return f"'[{p.name}]{sheet}'!{abs_cell}"
     def _ext_ref_cell(p: Path, sheet: str, cell: str) -> str:
-        """
+        r"""
         Build Excel external reference like:
-        ='[Workbook.xlsx]SheetName'!$B$9
-        (Let Excel manage the full path; this avoids unicode/space path edge cases.)
+        ='C:\dir\[Workbook.xlsx]SheetName'!$B$9
+        Uses absolute path so links resolve regardless of output location.
         """
         import re
         m = re.match(r"([A-Za-z]+)(\d+)", cell)
@@ -295,9 +310,33 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
             raise ValueError(f"Invalid cell ref: {cell}")
         col, row = m.groups()
         abs_cell = f"${col.upper()}${row}"
+        win_dir = str(p.parent).replace("/", "\\")
+        return f"'{win_dir}\\[{p.name}]{sheet}'!{abs_cell}"
 
-        print(f"[RPTIS10] using sheet: {ext_sheet}  file: {rptis10_path}")
-        return f"'[{p.name}]{sheet}'!{abs_cell}"
+
+    def _set_formula(ws, r: int, c: int, formula: str, debug_once: dict):
+        """
+        Assign formula to ws[r,c]. Strips any accidental trailing letters (e.g. '$B$9D').
+        Prints the first formula set for quick inspection.
+        """
+        # guard: if we ever see '$B$9' or '$E$9' followed by stray letters, trim them
+        for anchor in ("$B$9", "$E$9"):
+            i = formula.find(anchor)
+            if i != -1:
+                j = i + len(anchor)
+                # if anything alphabetic immediately follows, trim it
+                while j < len(formula) and formula[j].isalpha():
+                    j += 1
+                formula = formula[:j] + formula[j:].lstrip()  # just in case of spaces
+
+        cell = ws.cell(row=r, column=c)
+        cell.value = formula
+
+        # one-time debug print
+        key = f"{get_column_letter(c)}{r}"
+        if key not in debug_once:
+            print(f"[formula] {key} = {formula}")
+            debug_once[key] = True
 
 
     # =========================
@@ -315,23 +354,23 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
         # If we can't open it (permissions/locked/etc.), fall back to a sane default
         ext_sheet = "Sheet0"
 
-    ext_b9 = _ext_ref_cell(rptis10_path, ext_sheet, "B9")
-    # Example ext_b9 ->  `'C:\...\關係人\[RPTIS10_I_A01_202504.xlsx]Sheet0'!$B$9`
+    debug_once = {}
 
-    # Walk company rows in the 2025/04 block (A–H), stop at first 「合計」
+    # ----- Column D -----
+    ext_b9 = _ext_ref_cell(rptis10_path, ext_sheet, "B9")
     row = 4
     start_row_d = None
     while True:
-        b_val = ws.cell(row, 2).value  # company name / 「合計」
+        b_val = ws.cell(row, 2).value
         if b_val is None:
             break
         if str(b_val).strip() == "合計":
             if start_row_d is not None and row > start_row_d:
-                ws.cell(row, 4).value = f"=SUM(D{start_row_d}:D{row-1})"
+                _set_formula(ws, row, 4, f"=SUM(D{start_row_d}:D{row-1})", debug_once)
             break
 
-        # D = C / external B9
-        ws.cell(row, 4).value = f"=C{row}/{ext_b9}"
+        _set_formula(ws, row, 4, f"=C{row}/{ext_b9}", debug_once)
+
         if start_row_d is None:
             start_row_d = row
         row += 1
@@ -362,25 +401,20 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
         row += 1
 
     # =========================
-    # Column F formulas:
-    #  F = E / (external RPTIS10!$E$9)
-    #  Stop at first 「合計」; on that row set SUM of F above.
-    # =========================
+    # ----- Column F -----
     ext_e9 = _ext_ref_cell(rptis10_path, ext_sheet, "E9")
-
     row = 4
     start_row_f = None
     while True:
-        b_val = ws.cell(row, 2).value  # col B
+        b_val = ws.cell(row, 2).value
         if b_val is None:
             break
         if str(b_val).strip() == "合計":
             if start_row_f is not None and row > start_row_f:
-                ws.cell(row, 6).value = f"=SUM(F{start_row_f}:F{row-1})"
+                _set_formula(ws, row, 6, f"=SUM(F{start_row_f}:F{row-1})", debug_once)
             break
 
-        # F_r = E_r / external E9
-        ws.cell(row, 6).value = f"=E{row}/{ext_e9}"
+        _set_formula(ws, row, 6, f"=E{row}/{ext_e9}", debug_once)
 
         if start_row_f is None:
             start_row_f = row

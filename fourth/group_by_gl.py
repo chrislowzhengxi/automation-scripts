@@ -5,6 +5,7 @@ from pathlib import Path
 from copy import copy as copy_style
 from datetime import datetime, date
 from openpyxl.styles import Alignment
+from openpyxl.styles import PatternFill
 import re
 import sys
 import pandas as pd
@@ -12,6 +13,7 @@ import openpyxl
 from datetime import datetime, date
 from openpyxl.utils import get_column_letter
 
+YELLOW_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
 # ---------------- helpers ----------------
 
 def norm_code(x):
@@ -192,6 +194,81 @@ def group_export_by_account(
     # 5) open workbook
     wb = openpyxl.load_workbook(export_path)
     src_ws = wb[sheet_used]  # header style source
+    # ---- Highlighting helpers (need selected_cols + wb) ----
+    code_to_title: dict[str, str] = {}
+
+    PREF_KEY_COLS = ["文件號碼", "過帳日期", "G/L科目", "國貨幣計算之金額"]
+
+    def _is_blank(v) -> bool:
+        # Treat None, empty, whitespace, and pandas NaN/NaT as blank
+        if v is None:
+            return True
+        # pandas/Excel NaN -> float('nan') or string 'nan'
+        try:
+            import math
+            if isinstance(v, float) and math.isnan(v):
+                return True
+        except Exception:
+            pass
+        s = str(v).strip()
+        return s == "" or s.lower() in {"nan", "nat"}
+
+
+    def _norm_scalar(x):
+        if x is None:
+            return ""
+        try:
+            dt = pd.to_datetime(x, errors="coerce")
+            if not pd.isna(dt):
+                return dt.date().isoformat()
+        except Exception:
+            pass
+        s = str(x).strip()
+        if s.endswith(".0"):
+            s = s[:-2]
+        return s
+
+    def _make_key_from_series(sr: pd.Series, key_cols: list[str]) -> tuple:
+        return tuple(_norm_scalar(sr.get(k)) for k in key_cols)
+
+    def _make_key_from_ws_row(ws_g, r: int, idx_map: dict[str, int]) -> tuple:
+        return tuple(_norm_scalar(ws_g.cell(row=r, column=cidx).value) for cidx in idx_map.values())
+
+    def _effective_key_cols(headers: list[str]) -> list[str]:
+        has = set(headers)
+        if {"文件號碼", "過帳日期"} <= has:
+            return ["文件號碼", "過帳日期"]
+        if "文件號碼" in has:
+            return ["文件號碼"]
+        return [h for h in PREF_KEY_COLS if h in has][:1]
+
+    def _col_indexes_map(headers: list[str], wants: list[str]) -> dict[str, int]:
+        return {h: headers.index(h) + 1 for h in wants if h in headers}
+
+    def _highlight_code_rows(code: str, df_sub: pd.DataFrame):
+        title = code_to_title.get(code)
+        if not title or title not in wb.sheetnames:
+            return
+        ws_g = wb[title]
+
+        key_cols = _effective_key_cols(selected_cols)
+        if not key_cols:
+            return
+        idx_map = _col_indexes_map(selected_cols, key_cols)
+
+        keys = { _make_key_from_series(sr, key_cols) for _, sr in df_sub.iterrows() }
+
+        col_cleared = selected_cols.index("結清文件") + 1 if "結清文件" in selected_cols else None
+
+        for r in range(2, ws_g.max_row + 1):
+            if col_cleared:
+                cleared_val = ws_g.cell(row=r, column=col_cleared).value
+                if not _is_blank(cleared_val):
+                    continue
+            row_key = _make_key_from_ws_row(ws_g, r, idx_map)
+            if row_key in keys:
+                for c in range(1, ws_g.max_column + 1):
+                    ws_g.cell(row=r, column=c).fill = YELLOW_FILL
 
     # 6) create grouped sheets and write data
     used_titles = {ws.title for ws in wb.worksheets}
@@ -202,6 +279,7 @@ def group_export_by_account(
         base_title = f"{code} {name}".strip()
         title = ensure_unique_title(base_title, used_titles)
         used_titles.add(title)
+        code_to_title[code] = title
 
         ws = wb.create_sheet(title=title)
 
@@ -264,17 +342,23 @@ def group_export_by_account(
             del wb[title]
         ws = wb.create_sheet(title=title, index=0)
 
-        # Use same B..X selection you already computed
-        # (selected_cols comes from earlier; we reuse it)
-        # Header
-        for j, col_name in enumerate(selected_cols, start=1):
-            ws.cell(row=1, column=j, value=str(col_name))
+        # === NEW: Section 1 header text (like the 0623 file) ===
+        ws.cell(row=1, column=1, value="1. 預付費用超過30天未報銷之項目，請說明原因。")
+        row_ptr = 3  # leave one blank line after the header
 
-        # Optional: copy header style like other sheets
-        copy_header_style(src_ws, [df_export.columns.get_loc(c) + 1 for c in selected_cols], ws, dst_row=1)
+        # Small lead-in line (same wording as screenshot)
+        ws.cell(row=row_ptr, column=1, value="→超過30天預付費用明細：")
+        row_ptr += 1
+
+        # Header for the first table starts here
+        hdr_row = row_ptr
+        for j, col_name in enumerate(selected_cols, start=1):
+            ws.cell(row=hdr_row, column=j, value=str(col_name))
+        copy_header_style(src_ws, [df_export.columns.get_loc(c) + 1 for c in selected_cols], ws, dst_row=hdr_row)
 
         # Rows
-        for i, row in enumerate(summary[selected_cols].itertuples(index=False, name=None), start=2):
+        data_start = hdr_row + 1
+        for i, row in enumerate(summary[selected_cols].itertuples(index=False, name=None), start=data_start):
             for j, val in enumerate(row, start=1):
                 ws.cell(row=i, column=j, value=val)
 
@@ -284,8 +368,20 @@ def group_export_by_account(
         for h in DATE_COLS:
             if h in header_to_idx:
                 cidx = header_to_idx[h]
-                for r in range(2, 2 + len(summary)):
+                for r in range(data_start, data_start + len(summary)):
                     ws.cell(row=r, column=cidx).number_format = "m/d/yyyy"
+        
+        # Highlight matching rows in their original grouped sheets
+        # Group by GL code because the 'summary' may contain multiple codes from TARGET_CODES
+        for ccode, subgrp in summary.groupby("_code"):
+             _highlight_code_rows(ccode, subgrp)
+
+
+                    
+        # === NEW: Section 2 header text before 存出保證金 ===
+        row_ptr = ws.max_row + 2  # two blank lines after the above table
+        ws.cell(row=row_ptr, column=1, value="2. 存出保證金是否應取回，以及流動性分類是否正確。")
+        row_ptr += 2  # one blank line before the next header
 
         # ---- Append 存出保證金 (split into two sections: 11780300 then 18200100) ----
         CODES_SEQ = [("11780300", "存出保證金-流動"), ("18200100", "存出保證金")]
@@ -296,7 +392,7 @@ def group_export_by_account(
                 continue
 
             # leave 2 blank rows after whatever content already exists
-            start_row = ws.max_row + 3 if idx == 0 else ws.max_row + 2
+            start_row = ws.max_row + 2
 
             # Header (repeat for each section)
             for j, col_name in enumerate(selected_cols, start=1):
@@ -314,6 +410,10 @@ def group_export_by_account(
                     cidx = header_to_idx[h]
                     for r in range(start_row + 1, start_row + 1 + len(sub)):
                         ws.cell(row=r, column=cidx).number_format = "m/d/yyyy"
+
+            # Highlight for this 保證金 code
+            _highlight_code_rows(code, sub)
+
 
 
     # ==== Step 5 (append to 說明): >90天 其他應收/其他應付/代收/代付款 ====
@@ -410,6 +510,11 @@ def group_export_by_account(
                     for rr in range(hdr_row + 1, r):
                         ws_.cell(row=rr, column=cidx).number_format = "m/d/yyyy"
 
+
+            # Highlight for all codes included in this sub-section
+            for ccode, subgrp in sub.groupby("_code"):
+                _highlight_code_rows(ccode, subgrp)
+
             # One blank row after the block
             return r + 1
 
@@ -471,12 +576,28 @@ def group_export_by_account(
                 for rr in range(hdr_row + 1, r):
                     ws_.cell(row=rr, column=cidx).number_format = "m/d/yyyy"
 
+        # Highlight for all codes in this 30-day subsection
+        for ccode, subgrp in sub.groupby("_code"):
+            _highlight_code_rows(ccode, subgrp)
+
         return r + 1  # one blank row after the block
 
     # Two subsections: 暫付款 / 暫收款
     row_ptr = write_section_30(ws, row_ptr, "超過30天 暫付款未沖帳明細", ADVANCE_PAY_CODES)
     row_ptr = write_section_30(ws, row_ptr, "超過30天 暫收款未沖帳明細", ADVANCE_REC_CODES)
 
+    # === Append manual-decision questions (no answers, just text) ===
+    row_ptr = ws.max_row + 2  # leave some blank space
+
+    manual_questions = [
+        "5. 關係人之應收/應付款是否逾期? 原因為何?",
+        "6. 關係人交易科目的餘額是否對帳一致?",
+        "7. 是否有預付/應付/應收/暫付/暫收/暫付等資產負債無檢查之情況。",
+    ]
+
+    for q in manual_questions:
+        ws.cell(row=row_ptr, column=1, value=q)
+        row_ptr += 2  # add a blank line after each question
 
     # === Format columns L and N in 說明 (if they exist) ===
     NUMBER_FMT = '#,##0;[Red](#,##0)'

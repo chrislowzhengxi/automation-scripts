@@ -602,10 +602,16 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
         # Build the formula
         # =E{r}-(SUMIFS(MRS[F:F],MRS[A:A],"421007",MRS[D:D],A{r})
         #       +SUMIFS(MRS[F:F],MRS[A:A],"421807",MRS[D:D],A{r}))
+        # formula_g = (
+        #     f"=E{row}-("
+        #     f"SUMIFS({ext_F},{ext_A},\"421007\",{ext_D},A{row})+"
+        #     f"SUMIFS({ext_F},{ext_A},\"421807\",{ext_D},A{row})"
+        #     f")"
+        # )
         formula_g = (
             f"=E{row}-("
-            f"SUMIFS({ext_F},{ext_A},\"421007\",{ext_D},A{row})+"
-            f"SUMIFS({ext_F},{ext_A},\"421807\",{ext_D},A{row})"
+            f"SUMPRODUCT(({ext_F})*({ext_A}=\"421007\")*({ext_D}=A{row})) + "
+            f"SUMPRODUCT(({ext_F})*({ext_A}=\"421807\")*({ext_D}=A{row}))"
             f")"
         )
         _set_formula(ws, row, 7, formula_g, debug_once)  # G column

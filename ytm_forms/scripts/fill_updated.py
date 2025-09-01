@@ -113,6 +113,113 @@ def copy_body_style_from_left(ws, row: int, col_idx: int):
     d.alignment = _cpy(s.alignment); d.protection = _cpy(s.protection)
 
 
+def _find_row_ws(ws, col_idx: int, text: str) -> int | None:
+    """Find first row where ws[row, col_idx] == text (trimmed)."""
+    for r in range(1, (ws.max_row or 1) + 1):
+        v = ws.cell(r, col_idx).value
+        if isinstance(v, str) and v.strip() == text:
+            return r
+    return None
+
+def _first_company_row(ws, start_r: int) -> int | None:
+    """From start_r downward, find first row that looks like a company row (A has an ID; B not '合計')."""
+    r = start_r
+    while r <= (ws.max_row or 1):
+        a = ws.cell(r, 1).value
+        b = str(ws.cell(r, 2).value or "").strip()
+        if b == "合計":
+            return None
+        # treat any non-empty A as a data row
+        if a not in (None, "", " "):
+            return r
+        r += 1
+    return None
+
+def _first_total_row(ws, start_r: int) -> int | None:
+    """Find first row at/after start_r where column B == '合計'."""
+    r = start_r
+    while r <= (ws.max_row or 1):
+        if str(ws.cell(r, 2).value or "").strip() == "合計":
+            return r
+        r += 1
+    return None
+
+def _first_sheet_name(xlsx_path: Path, fallback: str = "Sheet0") -> str:
+    try:
+        _wb = load_workbook(xlsx_path, read_only=True, data_only=True)
+        name = _wb.sheetnames[0] if _wb.sheetnames else fallback
+        _wb.close()
+        return name
+    except Exception:
+        return fallback
+
+def _col_ref_local(sheet_name: str, col_letter: str) -> str:
+    col = col_letter.upper()
+    return f"'{sheet_name}'!${col}:${col}"
+
+def _col_ref_external(p: Path, sheet: str, col_letter: str) -> str:
+    # absolute, full column
+    win_dir = str(p.parent).replace("/", "\\")
+    col = col_letter.upper()
+    return f"'{win_dir}\\[{p.name}]{sheet}'!${col}:${col}"
+
+
+def fill_yingshoukuan_block(ws, mrs0014_path: Path, mrs0014_sheet: str):
+    """
+    應收款 block:
+      - Locate header row (col B == '應收款')
+      - Company rows: first data row after the header band to the FIRST '合計' - 1
+      - C = D - M
+      - D = SUMIF('4-3.應收關係人科餘'!J:J, A_r, '4-3.應收關係人科餘'!Y:Y)
+      - E = D / ( SUMIF(MRS0014!A:A,"112000",MRS0014!S:S)
+                + SUMIF(MRS0014!A:A,"112300",MRS0014!S:S)
+                + SUMIF(MRS0014!A:A,"112337",MRS0014!S:S) )
+      - Totals only on the FIRST '合計' row.
+    """
+    hdr = _find_row_ws(ws, 2, "應收款")
+    if not hdr:
+        return
+
+    # Skip the blue section title row and the field header row → data starts at hdr+2
+    first_candidate = hdr + 2
+    start = _first_company_row(ws, first_candidate)
+    if not start:
+        return
+
+    total_row = _first_total_row(ws, start)
+    if not total_row or total_row <= start:
+        return
+
+    # Prefer local sheet 'MRS0014' if present; else external workbook
+    if "MRS0014" in ws.parent.sheetnames:
+        rngA = _col_ref_local("MRS0014", "A")  # 'MRS0014'!$A:$A
+        rngS = _col_ref_local("MRS0014", "S")  # 'MRS0014'!$S:$S
+    else:
+        rngA = _col_ref_external(mrs0014_path, mrs0014_sheet, "A")
+        rngS = _col_ref_external(mrs0014_path, mrs0014_sheet, "S")
+
+    # Fill detail rows
+    for r in range(start, total_row):
+        ws.cell(r, 3).value = f"=D{r}-M{r}"
+        ws.cell(r, 4).value = f"=SUMIF('4-3.應收關係人科餘'!J:J,A{r},'4-3.應收關係人科餘'!Y:Y)"
+        ws.cell(r, 5).value = (
+            f"=D{r}/("
+            f"SUMIF({rngA},\"112000\",{rngS})+"
+            f"SUMIF({rngA},\"112300\",{rngS})+"
+            f"SUMIF({rngA},\"112337\",{rngS})"
+            f")"
+        )
+
+    # Totals (FIRST 合計 only)
+    ws.cell(total_row, 3).value = f"=SUM(C{start}:C{total_row-1})"
+    ws.cell(total_row, 4).value = f"=SUM(D{start}:D{total_row-1})"
+    ws.cell(total_row, 5).value = f"=SUM(E{start}:E{total_row-1})"
+
+    # Percent format for E
+    PCT_FMT = '0.00%;-0.00%;"-"'
+
+    for r in range(start, total_row + 1):
+        ws.cell(r, 5).number_format = PCT_FMT
 
 BLOCK_W = 9            # A–I
 SPACER_COL = "J"       # width = 1
@@ -152,6 +259,9 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
 
     wb = load_workbook(wb_or_path) if isinstance(wb_or_path, (str, Path)) else wb_or_path
     ws = wb[sheet_name]
+
+    mrs0034_sheet = _first_sheet_name(mrs0034_path) if mrs0034_path else "Sheet0"
+    mrs0014_sheet = _first_sheet_name(mrs0014_path) if mrs0014_path else "Sheet0"
 
     max_row = ws.max_row
     width   = BLOCK_W  # 9
@@ -376,6 +486,7 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
         if b_val is None:
             break
         if str(b_val).strip() == "合計":
+            total_row_e = row
             if start_row_e is not None and row > start_row_e:
                 ws.cell(row, 5).value = f"=SUM(E{start_row_e}:E{row-1})"
             break
@@ -394,36 +505,46 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
     # Post-total adjustment in Column E (row just below 合計)
     # E{total+1} = E{total} + SUMIF(MRS0014!A:A, "421007", MRS0014!S:S) + SUMIF(... "421807", ...)
     # =========================
-    if total_row_e:
-        if mrs0014_path is None:
-            raise ValueError("mrs0014_path not provided")
-
-        # Detect sheet name (prefer first tab)
-        try:
-            _m14 = load_workbook(mrs0014_path, read_only=True, data_only=True)
-            mrs0014_sheet = _m14.sheetnames[0]
-            _m14.close()
-        except Exception:
-            mrs0014_sheet = "Sheet0"
-
-        ext_A = _ext_ref_col(mrs0014_path, mrs0014_sheet, "A")
-        ext_S = _ext_ref_col(mrs0014_path, mrs0014_sheet, "S")
-
+    # if total_row_e and mrs0014_path:
+    #     ext_A14 = _ext_ref_col(mrs0014_path, mrs0014_sheet, "A")
+    #     ext_S14 = _ext_ref_col(mrs0014_path, mrs0014_sheet, "S")
+    #     target_row = total_row_e + 1
+    #     copy_body_style_from_left(ws, target_row, 5)
+    #     ws.cell(row=target_row, column=5).number_format = ws.cell(row=total_row_e, column=5).number_format
+    #     ws.cell(row=target_row, column=5).value = (
+    #         f"=E{total_row_e}"
+    #         f"+SUMIF({ext_A14},\"421007\",{ext_S14})"
+    #         f"+SUMIF({ext_A14},\"421807\",{ext_S14})"
+    #     )
+        # ----- Post-total adjustment in Column E (row just below 合計) -----
+    if total_row_e and mrs0014_path:
         target_row = total_row_e + 1
-        # keep the same number format as the total row above
-        ws.cell(row=target_row, column=5).number_format = ws.cell(row=total_row_e, column=5).number_format
 
-        # Optional: style like the row above
-        # (copies formats; if you prefer exact copy, you can clone the style from E{total_row_e})
+        # If the next row is another section header (e.g., 銷貨/進貨/應收款/應付款), insert a spare row
+        next_label = str(ws.cell(target_row, 2).value or "").strip()
+        if next_label in {"銷貨", "進貨", "應收款", "應付款"}:
+            ws.insert_rows(target_row)
+
+        # Prefer local 'MRS0014' sheet; fallback to external
+        if "MRS0014" in ws.parent.sheetnames:
+            A14 = f"'MRS0014'!$A:$A"
+            S14 = f"'MRS0014'!$S:$S"
+        else:
+            A14 = _ext_ref_col(mrs0014_path, mrs0014_sheet, "A")
+            S14 = _ext_ref_col(mrs0014_path, mrs0014_sheet, "S")
+
+        # Style & number format like the total row above
         copy_body_style_from_left(ws, target_row, 5)
+        ws.cell(target_row, 5).number_format = ws.cell(total_row_e, 5).number_format
 
-        # Build and set the formula
-        adj_formula = (
+        # E{target} = E{total} + SUMIF(...421007...) + SUMIF(...421807...)
+        ws.cell(target_row, 5).value = (
             f"=E{total_row_e}"
-            f"+SUMIF({ext_A},\"421007\",{ext_S})"
-            f"+SUMIF({ext_A},\"421807\",{ext_S})"
+            f"+SUMIF({A14},\"421007\",{S14})"
+            f"+SUMIF({A14},\"421807\",{S14})"
         )
-        ws.cell(row=target_row, column=5).value = adj_formula
+
+
 
 
     # =========================
@@ -455,16 +576,16 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
     if mrs0034_path is None:
         raise ValueError("mrs0034_path not provided")
     
-    try:
-        _mrs_wb = load_workbook(mrs0034_path, read_only=True, data_only=True)
-        mrs_sheet = _mrs_wb.sheetnames[0]  # e.g., 'Sheet0'
-        _mrs_wb.close()
-    except Exception:
-        mrs_sheet = "Sheet0"
+    # try:
+    #     _mrs_wb = load_workbook(mrs0034_path, read_only=True, data_only=True)
+    #     mrs_sheet = _mrs_wb.sheetnames[0]  # e.g., 'Sheet0'
+    #     _mrs_wb.close()
+    # except Exception:
+    #     mrs_sheet = "Sheet0"
 
-    ext_F = _ext_ref_col(mrs0034_path, mrs_sheet, "F")
-    ext_A = _ext_ref_col(mrs0034_path, mrs_sheet, "A")
-    ext_D = _ext_ref_col(mrs0034_path, mrs_sheet, "D")
+    ext_F = _ext_ref_col(mrs0034_path, mrs0034_sheet, "F")
+    ext_A = _ext_ref_col(mrs0034_path, mrs0034_sheet, "A")
+    ext_D = _ext_ref_col(mrs0034_path, mrs0034_sheet, "D")
 
     row = 4
     while True:
@@ -497,7 +618,8 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
         ws.cell(row=r, column=7).number_format = CHECK_FMT
 
 
-
+    if mrs0014_path:
+        fill_yingshoukuan_block(ws, mrs0014_path, mrs0014_sheet)
 
     return wb
 

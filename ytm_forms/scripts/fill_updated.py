@@ -134,7 +134,7 @@ def _prev_ym(ym: str) -> str:
     y2, m2 = (y - 1, 12) if m == 1 else (y, m - 1)
     return f"{y2}/{m2:02d}"
 
-def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: str = None, rptis10_path: Path = None):
+def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: str = None, rptis10_path: Path = None, mrs0034_path: Path = None, mrs0014_path: Path = None):
     """
     Structure-only (safe & period-driven):
       - new_month = --period (YYYY/MM)
@@ -276,28 +276,6 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
         row += 1
 
 
-    # def _ext_ref_cell(p: Path, sheet: str, cell: str) -> str:
-    #     """
-    #     Build Excel external reference string.
-    #     Example: 'C:\dir\[file.xlsx]Sheet0'!$E$9
-    #     """
-    #     win_path = str(p.parent).replace("/", "\\")
-    #     return f"'[{p.name}]{sheet}'!${cell}" if not win_path else f"'{win_path}\\[{p.name}]{sheet}'!${cell}"
-    # def _ext_ref_cell(p: Path, sheet: str, cell: str) -> str:
-    #     """
-    #     Build Excel external reference like:
-    #     ='[Workbook.xlsx]SheetName'!$B$9
-    #     (Let Excel manage the full path; this avoids unicode/space path edge cases.)
-    #     """
-    #     import re
-    #     m = re.match(r"([A-Za-z]+)(\d+)", cell)
-    #     if not m:
-    #         raise ValueError(f"Invalid cell ref: {cell}")
-    #     col, row = m.groups()
-    #     abs_cell = f"${col.upper()}${row}"
-
-    #     print(f"[RPTIS10] using sheet: {ext_sheet}  file: {rptis10_path}")
-    #     return f"'[{p.name}]{sheet}'!{abs_cell}"
     def _ext_ref_cell(p: Path, sheet: str, cell: str) -> str:
         r"""
         Build Excel external reference like:
@@ -312,6 +290,16 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
         abs_cell = f"${col.upper()}${row}"
         win_dir = str(p.parent).replace("/", "\\")
         return f"'{win_dir}\\[{p.name}]{sheet}'!{abs_cell}"
+    
+    def _ext_ref_col(p: Path, sheet: str, col_letter: str) -> str:
+        r"""
+        Build Excel external reference for a full column:
+        ='C:\dir\[Workbook.xlsx]SheetName'!$F:$F
+        """
+        win_dir = str(p.parent).replace("/", "\\")
+        col = col_letter.upper()
+        return f"'{win_dir}\\[{p.name}]{sheet}'!${col}:${col}"
+
 
 
     def _set_formula(ws, r: int, c: int, formula: str, debug_once: dict):
@@ -382,6 +370,7 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
     # =========================
     row = 4
     start_row_e = None
+    total_row_e = None  # NEW: remember where 合計 is
     while True:
         b_val = ws.cell(row, 2).value  # col B
         if b_val is None:
@@ -399,6 +388,43 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
         if start_row_e is None:
             start_row_e = row
         row += 1
+
+
+    # =========================
+    # Post-total adjustment in Column E (row just below 合計)
+    # E{total+1} = E{total} + SUMIF(MRS0014!A:A, "421007", MRS0014!S:S) + SUMIF(... "421807", ...)
+    # =========================
+    if total_row_e:
+        if mrs0014_path is None:
+            raise ValueError("mrs0014_path not provided")
+
+        # Detect sheet name (prefer first tab)
+        try:
+            _m14 = load_workbook(mrs0014_path, read_only=True, data_only=True)
+            mrs0014_sheet = _m14.sheetnames[0]
+            _m14.close()
+        except Exception:
+            mrs0014_sheet = "Sheet0"
+
+        ext_A = _ext_ref_col(mrs0014_path, mrs0014_sheet, "A")
+        ext_S = _ext_ref_col(mrs0014_path, mrs0014_sheet, "S")
+
+        target_row = total_row_e + 1
+        # keep the same number format as the total row above
+        ws.cell(row=target_row, column=5).number_format = ws.cell(row=total_row_e, column=5).number_format
+
+        # Optional: style like the row above
+        # (copies formats; if you prefer exact copy, you can clone the style from E{total_row_e})
+        copy_body_style_from_left(ws, target_row, 5)
+
+        # Build and set the formula
+        adj_formula = (
+            f"=E{total_row_e}"
+            f"+SUMIF({ext_A},\"421007\",{ext_S})"
+            f"+SUMIF({ext_A},\"421807\",{ext_S})"
+        )
+        ws.cell(row=target_row, column=5).value = adj_formula
+
 
     # =========================
     # ----- Column F -----
@@ -419,6 +445,57 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
         if start_row_f is None:
             start_row_f = row
         row += 1
+
+    # =========================
+    # ----- Column G (new) -----
+    # G_r = E{r} - ( SUMIFS(MRS[F:F], MRS[A:A],"421007", MRS[D:D], A{r})
+    #              + SUMIFS(MRS[F:F], MRS[A:A],"421807", MRS[D:D], A{r}) )
+    # Skip "合計" row (leave blank).
+    # =========================
+    if mrs0034_path is None:
+        raise ValueError("mrs0034_path not provided")
+    
+    try:
+        _mrs_wb = load_workbook(mrs0034_path, read_only=True, data_only=True)
+        mrs_sheet = _mrs_wb.sheetnames[0]  # e.g., 'Sheet0'
+        _mrs_wb.close()
+    except Exception:
+        mrs_sheet = "Sheet0"
+
+    ext_F = _ext_ref_col(mrs0034_path, mrs_sheet, "F")
+    ext_A = _ext_ref_col(mrs0034_path, mrs_sheet, "A")
+    ext_D = _ext_ref_col(mrs0034_path, mrs_sheet, "D")
+
+    row = 4
+    while True:
+        b_val = ws.cell(row, 2).value  # company name / 合計
+        if b_val is None:
+            break
+        if str(b_val).strip() == "合計":
+            # per requirement: leave G total row blank (no formula)
+            break
+
+        # Style like F’s left neighbor
+        copy_body_style_from_left(ws, row, 7)  # col 7 = G
+
+        # Build the formula
+        # =E{r}-(SUMIFS(MRS[F:F],MRS[A:A],"421007",MRS[D:D],A{r})
+        #       +SUMIFS(MRS[F:F],MRS[A:A],"421807",MRS[D:D],A{r}))
+        formula_g = (
+            f"=E{row}-("
+            f"SUMIFS({ext_F},{ext_A},\"421007\",{ext_D},A{row})+"
+            f"SUMIFS({ext_F},{ext_A},\"421807\",{ext_D},A{row})"
+            f")"
+        )
+        _set_formula(ws, row, 7, formula_g, debug_once)  # G column
+        row += 1
+
+    CHECK_FMT = '#,##0;-#,##0;"-"'
+
+    last_row_g = row - 1  # row has already advanced past 合計
+    for r in range(4, last_row_g + 1):
+        ws.cell(row=r, column=7).number_format = CHECK_FMT
+
 
 
 
@@ -600,23 +677,24 @@ def main():
                     help="Which sheet(s) to fill.")
     parser.add_argument("--src-43", help="Source workbook for 4-3 (columns B:X).")
     parser.add_argument("--src-23", help="Source workbook for 2-3 (columns A:AJ).")
-    # parser.add_argument("--src-43", default=r"C:\Users\TP2507088\Downloads\Automation\ytm_forms\data\template\關係人\export_關係人交易-應收帳款.xlsx",
-    #                     help="Source workbook for 4-3 (columns B:X).")
-    # parser.add_argument("--src-23", default=r"C:\Users\TP2507088\Downloads\Automation\ytm_forms\data\template\關係人\export_關係人交易-收入.xlsx",
-    #                     help="Source workbook for 2-3 (columns A:AJ).")
 
     # NEW: external lookups
     parser.add_argument("--period", required=True, help="e.g., 202504")
-    # parser.add_argument("--rates-path",
-    #                     help="External rates workbook path; overrides default pattern: <period> Ending 及 Avg (資通版本).xls")
-    # parser.add_argument("--relparty-path",
-    #                     default=r"C:\Users\TP2507088\Downloads\Automation\ytm_forms\data\template\關係人\關係企業(人).xls",
-    #                     help="External related-party master workbook path (default: 關係企業(人).xls)")
     parser.add_argument("--rates-path", help="External rates workbook path; overrides default pattern.")
     parser.add_argument("--relparty-path", help="External related-party master workbook path.")
     parser.add_argument(
         "--rptis10-path",
         help="External RPTIS10 workbook path. Defaults to .../ytm_forms/data/template/關係人/RPTIS10_I_A01_<period>.xlsx"
+    )
+
+    parser.add_argument(
+        "--mrs0034-path",
+        help="External MRS0034 workbook path. Defaults to .../ytm_forms/data/template/關係人/MRS0034_I_A01_<period>.xlsx"
+    )
+
+    parser.add_argument(
+        "--mrs0014-path",
+        help="External MRS0014 workbook path. Defaults to .../ytm_forms/data/template/關係人/MRS0014_I_A01_<period>.xlsx"
     )
 
     args = parser.parse_args()
@@ -629,6 +707,16 @@ def main():
 
     # Resolve external files (allow override via CLI)
     yyyymm = args.period
+
+    mrs0034_path = Path(args.mrs0034_path) if args.mrs0034_path else (
+        BASE_TPL / f"MRS0034_I_A01_{yyyymm}.xlsx"
+    )
+
+    mrs0014_path = Path(args.mrs0014_path) if args.mrs0014_path else (
+        BASE_TPL / f"MRS0014_I_A01_{yyyymm}.xlsx"
+    )
+
+
     default_rates = BASE_TPL / f"{yyyymm} Ending 及 Avg (資通版本).xls"
     rates_path   = Path(args.rates_path) if args.rates_path else default_rates
     relparty_path = Path(args.relparty_path) if args.relparty_path else (BASE_TPL / "關係企業(人).xls")
@@ -656,7 +744,7 @@ def main():
     )
 
     if args.task in ("announce_structure", "all"):
-        wb_tmp = prepare_month_structure(final_out, sheet_name=args.announce_sheet, period_yyyymm=args.period, rptis10_path=rptis10_path)
+        wb_tmp = prepare_month_structure(final_out, sheet_name=args.announce_sheet, period_yyyymm=args.period, rptis10_path=rptis10_path, mrs0034_path=mrs0034_path, mrs0014_path=mrs0014_path)
         wb_tmp.save(final_out)
         wb_tmp.close()
 

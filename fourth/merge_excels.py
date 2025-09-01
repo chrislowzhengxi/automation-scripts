@@ -6,7 +6,7 @@ import pandas as pd
 
 
 from group_by_gl import group_export_by_account, choose_output_path
-import datetime
+from datetime import datetime, date
 
 
 from pathlib import Path
@@ -116,7 +116,20 @@ def main_cli():
     ap.add_argument("--sheet-name", default=None, help="Specific sheet name to read (default: first sheet)")
     ap.add_argument("--keep-duplicates", action="store_true", help="Keep duplicate rows (default: drop exact duplicates)")
     ap.add_argument("--gui", action="store_true", help="Open a simple GUI to pick files")
+    ap.add_argument("--cutoff", default=None, help="Cutoff date (YYYY-MM-DD) for 30/90-day tests. Defaults to today.")
     args = ap.parse_args()
+
+
+    # Parse cutoff date
+    if args.cutoff:
+        try:
+            cutoff_date = datetime.strptime(args.cutoff, "%Y-%m-%d").date()
+        except ValueError:
+            print("[ERROR] --cutoff must be YYYY-MM-DD (e.g., 2025-06-30)", file=sys.stderr)
+            sys.exit(2)
+    else:
+        cutoff_date = date.today()
+
 
     if args.gui:
         return run_gui()
@@ -178,7 +191,7 @@ def main_cli():
         inplace=False,
         drop_original_titles=["Sheet1","Sheet2","Sheet3"],
         date_columns=["文件日期","過帳日期"],
-        cutoff_date=datetime.date.today()
+        cutoff_date=cutoff_date
     )
 
     print(f"✅ Grouped output written to {output_path}")
@@ -222,6 +235,16 @@ def run_gui():
                 return
             out = out_entry.get().strip() or "combined.xlsx"
 
+            cutoff_str = cutoff_entry.get().strip()
+            if cutoff_str:
+                try:
+                    cutoff_dt = datetime.strptime(cutoff_str, "%Y-%m-%d").date()
+                except ValueError:
+                    messagebox.showerror("Error", "Cutoff date must be YYYY-MM-DD (e.g., 2025-06-30).")
+                    return
+            else:
+                cutoff_dt = date.today()        
+
             # Load reference (or fallback)
             if state["ref"]:
                 ref_df = read_first_sheet(Path(state["ref"]))
@@ -256,7 +279,7 @@ def run_gui():
 
             # === Immediately run group_by_gl.py on merged file ===
             from group_by_gl import group_export_by_account
-            import datetime
+
 
             mapping_path = Path("會計科目對照表.xlsx")  # adjust path if needed
             output_path = out_path.with_name(out_path.stem + "_grouped.xlsx")
@@ -269,7 +292,7 @@ def run_gui():
                 inplace=False,
                 drop_original_titles=["Sheet1", "Sheet2", "Sheet3"],
                 date_columns=["文件日期", "過帳日期"],
-                cutoff_date=datetime.date.today()
+                cutoff_date=cutoff_dt
             )
 
 
@@ -305,10 +328,17 @@ def run_gui():
     out_entry.insert(0, "combined.xlsx")
     out_entry.grid(row=5, column=0, sticky="w")
 
-    tk.Checkbutton(frm, text="Keep duplicate rows", variable=keep_dups_var).grid(row=6, column=0, sticky="w", pady=(10,0))
 
-    tk.Button(frm, text="Merge", command=do_merge).grid(row=7, column=0, pady=12, sticky="w")
-    tk.Button(frm, text="Close", command=root.destroy).grid(row=7, column=1, pady=12, sticky="w")
+    tk.Label(frm, text="Cutoff date (YYYY-MM-DD, blank = today):").grid(row=6, column=0, sticky="w", pady=(10,0))
+    cutoff_entry = tk.Entry(frm, width=30)
+    cutoff_entry.insert(0, "")  # leave blank => today
+    cutoff_entry.grid(row=7, column=0, sticky="w")
+
+
+    tk.Checkbutton(frm, text="Keep duplicate rows", variable=keep_dups_var).grid(row=8, column=0, sticky="w", pady=(10,0))
+
+    tk.Button(frm, text="Merge", command=do_merge).grid(row=9, column=0, pady=12, sticky="w")
+    tk.Button(frm, text="Close", command=root.destroy).grid(row=9, column=1, pady=12, sticky="w")
 
     root.mainloop()
 

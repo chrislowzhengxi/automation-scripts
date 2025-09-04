@@ -6,6 +6,7 @@ from copy import copy as copy_style
 from datetime import datetime, date
 from openpyxl.styles import Alignment
 from openpyxl.styles import PatternFill
+from openpyxl.styles import Font
 import re
 import sys
 import pandas as pd
@@ -15,6 +16,12 @@ from openpyxl.utils import get_column_letter
 
 YELLOW_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
 # ---------------- helpers ----------------
+
+def write_title(ws, row_ptr, text, blank_lines_after=1):
+    cell = ws.cell(row=row_ptr, column=1, value=text)
+    cell.font = Font(bold=True)
+    return row_ptr + 1 + blank_lines_after
+
 
 def norm_code(x):
     if pd.isna(x):
@@ -343,8 +350,17 @@ def group_export_by_account(
         ws = wb.create_sheet(title=title, index=0)
 
         # === NEW: Section 1 header text (like the 0623 file) ===
-        ws.cell(row=1, column=1, value="2. 預付費用超過30天未報銷之項目，請說明原因。")
-        row_ptr = 3  # leave one blank line after the header
+
+        row_ptr = 1
+
+        # === Section 1: 銀行存款 ===
+        cell = ws.cell(row=row_ptr, column=1, value="1. 銀行存款是否未含受限制存款或超過三個月以上定存")
+        cell.font = Font(bold=True)
+        row_ptr += 2
+
+        cell = ws.cell(row=row_ptr, column=1, value="2. 預付費用超過30天未報銷之項目，請說明原因。")
+        cell.font = Font(bold=True)
+        row_ptr += 1 # leave one blank line after the header
 
         # Small lead-in line (same wording as screenshot)
         ws.cell(row=row_ptr, column=1, value="→超過30天預付費用明細：")
@@ -379,8 +395,17 @@ def group_export_by_account(
 
                     
         # === NEW: Section 2 header text before 存出保證金 ===
+
+        # === Section 3: 預付費用 >1年 ===
+        row_ptr = ws.max_row + 2  # two blank lines after section 2 table
+        cell = ws.cell(row=row_ptr, column=1, value="3. 超過一年的預付費用流動性分類是否正確。")
+        cell.font = Font(bold=True)
+        row_ptr += 2  # leave one blank line after
+
+
         row_ptr = ws.max_row + 2  # two blank lines after the above table
-        ws.cell(row=row_ptr, column=1, value="4. 存出保證金是否應取回，以及流動性分類是否正確。")
+        cell = ws.cell(row=row_ptr, column=1, value="4. 存出保證金是否應取回，以及流動性分類是否正確。")
+        cell.font = Font(bold=True)
         row_ptr += 2  # one blank line before the next header
 
         # ---- Append 存出保證金 (split into two sections: 11780300 then 18200100) ----
@@ -467,7 +492,8 @@ def group_export_by_account(
         row_ptr = ws.max_row + 2
 
         # Top-level title
-        ws.cell(row=row_ptr, column=1, value="5. 超過90天之其他應收/其他應付/代收/代付款原因。")
+        cell = ws.cell(row=row_ptr, column=1, value="5. 超過90天之其他應收/其他應付/代收/代付款原因。")
+        cell.font = Font(bold=True)
         row_ptr += 2  # one blank row before first subsection
 
         def write_section_inline(ws_, start_row: int, section_title: str, codes: set[str]) -> int:
@@ -536,7 +562,8 @@ def group_export_by_account(
 
     # Start area (2 blank rows after whatever is already on 說明)
     row_ptr = ws.max_row + 2
-    ws.cell(row=row_ptr, column=1, value="6. 超過30天暫付款/暫收款未能結清的合理性。")
+    cell = ws.cell(row=row_ptr, column=1, value="6. 超過30天暫付款/暫收款未能結清的合理性。")
+    cell.font = Font(bold=True)
     row_ptr += 2  # one blank row before first subsection
 
     def write_section_30(ws_, start_row: int, section_title: str, codes: set[str]) -> int:
@@ -596,7 +623,8 @@ def group_export_by_account(
     ]
 
     for q in manual_questions:
-        ws.cell(row=row_ptr, column=1, value=q)
+        cell = ws.cell(row=row_ptr, column=1, value=q)
+        cell.font = Font(bold=True)
         row_ptr += 2  # add a blank line after each question
 
     # === Format columns L and N in 說明 (if they exist) ===

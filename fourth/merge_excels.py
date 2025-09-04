@@ -4,6 +4,11 @@ import sys
 from pathlib import Path
 import pandas as pd
 
+from openpyxl import load_workbook
+from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
+from unicodedata import east_asian_width
+
 
 from group_by_gl import group_export_by_account, choose_output_path
 from datetime import datetime, date
@@ -11,6 +16,117 @@ from datetime import datetime, date
 
 from pathlib import Path
 import pandas as pd
+
+
+def _text_display_units(s: str) -> float:
+    """
+    Approximate Excel display width in 'character' units.
+    Count wide CJK as ~1.7x.
+    """
+    if s is None:
+        return 0.0
+    s = str(s)
+    total = 0.0
+    for ch in s:
+        total += 1.7 if east_asian_width(ch) in ("W", "F") else 1.0
+    return total
+
+def enforce_arial_font(wb):
+    """
+    Switch only the font family to Arial, keep size/bold/italic/color/etc.
+    """
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                f = cell.font
+                # Only change if needed; Font is immutable → create a new one.
+                if f is None or f.name != "Arial":
+                    cell.font = Font(
+                        name="Arial",
+                        sz=f.sz if f else None,
+                        b=f.b if f else None,
+                        i=f.i if f else None,
+                        color=f.color if f else None,
+                        underline=f.u if f else None,
+                        strike=f.strike if f else None,
+                        vertAlign=f.vertAlign if f else None
+                    )
+
+def autofit_columns(ws, min_width=6, max_width=60, padding=2.0, skip_widths={1}):
+    """
+    Auto-size visible columns based on header + cell content.
+    - Respects hidden columns.
+    - Skips columns explicitly set to very narrow spacer widths (e.g., 1).
+    - Preserves merged cells/number formats/wrap.
+    """
+    dims = ws.column_dimensions
+    # Figure header row (first row with any value; fallback to row 1)
+    header_row_idx = 1
+    try:
+        for r in range(1, ws.max_row + 1):
+            if any(ws.cell(r, c).value not in (None, "") for c in range(1, ws.max_column + 1)):
+                header_row_idx = r
+                break
+    except Exception:
+        header_row_idx = 1
+
+    for col_idx in range(1, ws.max_column + 1):
+        col_letter = ws.cell(row=1, column=col_idx).column_letter
+        cd = dims[col_letter] if col_letter in dims else None
+
+        # Skip hidden columns
+        if cd and getattr(cd, "hidden", False):
+            continue
+        # Skip spacer columns: width explicitly set to ~1
+        if cd and cd.width is not None and round(cd.width, 1) in {float(w) for w in skip_widths}:
+            continue
+
+        # Measure header + all non-empty cells
+        max_units = 0.0
+        header_val = ws.cell(header_row_idx, col_idx).value
+        max_units = max(max_units, _text_display_units(header_val))
+
+        for row in ws.iter_rows(min_row=header_row_idx + 1,
+                                max_row=ws.max_row,
+                                min_col=col_idx, max_col=col_idx):
+            cell = row[0]
+            val = cell.value
+            if val is None or val == "":
+                continue
+            # Use number/date displayed text length approximation
+            text = str(val)
+            max_units = max(max_units, _text_display_units(text))
+
+        # Convert to Excel width units (rough heuristic)
+        desired = max_units + padding
+        desired = max(min_width, min(max_width, desired))
+
+        # Don’t shrink columns that already have a larger explicit width
+        if cd and cd.width and cd.width > desired:
+            continue
+
+        dims[col_letter].width = desired
+
+
+def _first_numeric_format(ws, col_letter, start_row=2):
+    for r in range(start_row, ws.max_row + 1):
+        v = ws[f"{col_letter}{r}"].value
+        if isinstance(v, (int, float)):
+            fmt = ws[f"{col_letter}{r}"].number_format
+            if fmt and fmt != "General":
+                return fmt
+    return None
+
+def _apply_number_format(ws, col_letter, number_format, start_row=2):
+    for r in range(start_row, ws.max_row + 1):
+        c = ws[f"{col_letter}{r}"]
+        if isinstance(c.value, (int, float)):
+            c.number_format = number_format
+
+def align_col_L_to_col_N(ws):
+    fmt = _first_numeric_format(ws, "N") or "#,##0;[Red](#,##0)"
+    _apply_number_format(ws, "L", fmt)
+
 
 def _peek_bytes(path: Path, n=4096) -> bytes:
     with open(path, "rb") as f:
@@ -195,6 +311,25 @@ def main_cli():
     )
 
     print(f"✅ Grouped output written to {output_path}")
+
+    # --- Post-merge formatting: Arial + Autofit ---
+    # Format the merged file
+    wb = load_workbook(out_path)
+    enforce_arial_font(wb)
+    for ws in wb.worksheets:
+        autofit_columns(ws, min_width=6, max_width=60, padding=2.0, skip_widths={1})
+    wb.save(out_path)
+
+    # Format the grouped file
+    gwb = load_workbook(output_path)
+    enforce_arial_font(gwb)
+    for ws in gwb.worksheets:
+        if ws.title.startswith("說明"):   # skip documentation sheets
+            continue
+        align_col_L_to_col_N(ws)          # <-- add this
+        autofit_columns(ws, min_width=6, max_width=60, padding=2.0, skip_widths={1})
+    gwb.save(output_path)
+
     for k, v in stats.items():
         print(f"- {k}: {v}")
 
@@ -295,6 +430,22 @@ def run_gui():
                 cutoff_date=cutoff_dt
             )
 
+
+            # --- Post-merge formatting: Arial + Autofit ---
+            wb = load_workbook(out_path)
+            enforce_arial_font(wb)
+            for ws in wb.worksheets:
+                autofit_columns(ws, min_width=6, max_width=60, padding=2.0, skip_widths={1})
+            wb.save(out_path)
+
+            gwb = load_workbook(output_path)
+            enforce_arial_font(gwb)
+            for ws in gwb.worksheets:
+                if ws.title.startswith("說明"):
+                    continue
+                align_col_L_to_col_N(ws)  
+                autofit_columns(ws, min_width=6, max_width=60, padding=2.0, skip_widths={1})
+            gwb.save(output_path)
 
             # Nice feedback: show how many went in and how many rows came out
             import tkinter

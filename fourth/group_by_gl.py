@@ -343,7 +343,7 @@ def group_export_by_account(
         ws = wb.create_sheet(title=title, index=0)
 
         # === NEW: Section 1 header text (like the 0623 file) ===
-        ws.cell(row=1, column=1, value="1. 預付費用超過30天未報銷之項目，請說明原因。")
+        ws.cell(row=1, column=1, value="2. 預付費用超過30天未報銷之項目，請說明原因。")
         row_ptr = 3  # leave one blank line after the header
 
         # Small lead-in line (same wording as screenshot)
@@ -380,7 +380,7 @@ def group_export_by_account(
                     
         # === NEW: Section 2 header text before 存出保證金 ===
         row_ptr = ws.max_row + 2  # two blank lines after the above table
-        ws.cell(row=row_ptr, column=1, value="2. 存出保證金是否應取回，以及流動性分類是否正確。")
+        ws.cell(row=row_ptr, column=1, value="4. 存出保證金是否應取回，以及流動性分類是否正確。")
         row_ptr += 2  # one blank line before the next header
 
         # ---- Append 存出保證金 (split into two sections: 11780300 then 18200100) ----
@@ -590,9 +590,9 @@ def group_export_by_account(
     row_ptr = ws.max_row + 2  # leave some blank space
 
     manual_questions = [
-        "5. 關係人之應收/應付款是否逾期? 原因為何?",
-        "6. 關係人交易科目的餘額是否對帳一致?",
-        "7. 是否有預付/應付/應收/暫付/暫收/暫付等資產負債無檢查之情況。",
+        "7. 關係人之應收/應付款是否逾期? 原因為何?",
+        "8. 關係人交易科目的餘額是否對帳一致?",
+        "9. 是否有預付/應付、應收/應付、暫付/應付等資產負債虛增之情況。",
     ]
 
     for q in manual_questions:

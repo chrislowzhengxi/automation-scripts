@@ -5,11 +5,11 @@
   "task": "all",
   "inplace": false,
   "out": "",
-  "src43": "",
-  "src23": "",
-  "rates": "",
-  "relparty": "",
-  "rptis10": "",
-  "mrs0034": "",
-  "mrs0014": ""
+  "src43": "C:/Users/TP2507088/Downloads/Automation/ytm_forms/data/template/關係人/export_關係人交易-應收帳款.xlsx",
+  "src23": "C:/Users/TP2507088/Downloads/Automation/ytm_forms/data/template/關係人/export_關係人交易-收入.xlsx",
+  "rates": "C:/Users/TP2507088/Downloads/Automation/ytm_forms/data/template/關係人/202504 Ending 及 Avg (資通版本).xls",
+  "relparty": "C:/Users/TP2507088/Downloads/Automation/ytm_forms/data/template/關係人/關係企業(人).xls",
+  "rptis10": "C:/Users/TP2507088/Downloads/Automation/ytm_forms/data/template/關係人/RPTIS10_I_A01_202504.xlsx",
+  "mrs0034": "C:/Users/TP2507088/Downloads/Automation/ytm_forms/data/template/關係人/MRS0034_I_A01_202504.xlsx",
+  "mrs0014": "C:/Users/TP2507088/Downloads/Automation/ytm_forms/data/template/關係人/MRS0014_I_A01_202504.xlsx"
 }

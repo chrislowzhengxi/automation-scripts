@@ -125,16 +125,45 @@ def _safe_col(ws, idx: int) -> str | None:
         return None
     return get_column_letter(idx)
 
+# def _group_cols(ws, start_idx: int, end_idx: int, hidden=True, outline_level=1):
+#     """Group columns if they exist (inclusive)."""
+#     start_letter = _safe_col(ws, start_idx)
+#     end_letter   = _safe_col(ws, end_idx)
+#     if start_letter and end_letter:
+#         ws.column_dimensions.group(start=start_letter, end=end_letter,
+#                                    outline_level=outline_level, hidden=hidden)
+#         # make sure outline symbols are visible
+#         ws.sheet_properties.outlinePr.summaryBelow = True
+#         ws.sheet_view.showOutlineSymbols = True
+
+from openpyxl.utils import get_column_letter
+
 def _group_cols(ws, start_idx: int, end_idx: int, hidden=True, outline_level=1):
-    """Group columns if they exist (inclusive)."""
-    start_letter = _safe_col(ws, start_idx)
-    end_letter   = _safe_col(ws, end_idx)
-    if start_letter and end_letter:
-        ws.column_dimensions.group(start=start_letter, end=end_letter,
-                                   outline_level=outline_level, hidden=hidden)
-        # make sure outline symbols are visible
-        ws.sheet_properties.outlinePr.summaryBelow = True
-        ws.sheet_view.showOutlineSymbols = True
+    """
+    Robust column grouping/hiding:
+    - Apply outlineLevel + hidden to EACH column in [start_idx, end_idx]
+    - Skip gracefully if beyond sheet width
+    - Ensure outline symbols are shown (+/−) and summary to the right
+    """
+    if start_idx <= 0:
+        start_idx = 1
+    if ws.max_column <= 0:
+        return
+
+    end_idx = min(end_idx, ws.max_column)
+    if start_idx > end_idx:
+        return
+
+    for idx in range(start_idx, end_idx + 1):
+        col_letter = get_column_letter(idx)
+        cd = ws.column_dimensions[col_letter]   # creates if missing
+        cd.outlineLevel = outline_level
+        cd.hidden = hidden
+
+    ws.sheet_view.showOutlineSymbols = True
+    ws.sheet_properties.outlinePr.summaryBelow = True
+    ws.sheet_properties.outlinePr.summaryRight = True
+
 
 def _apply_common_sheet_format(ws):
     """Freeze top row + enable filter on the whole used range."""
@@ -168,6 +197,72 @@ def _apply_groupings(ws):
     _group_cols(ws, 11, 12, hidden=True)
     # U–W (21–23). Will silently skip if not present.
     _group_cols(ws, 21, 23, hidden=True)
+
+
+def append_shuoming_column(ws):
+    last_col = ws.max_column
+    new_col = last_col + 1
+    new_letter = get_column_letter(new_col)
+    ws.cell(row=1, column=new_col, value="說明")
+
+    # Copy formatting from previous last column header
+    prev_cell = ws.cell(row=1, column=last_col)
+    new_cell  = ws.cell(row=1, column=new_col)
+
+    if prev_cell.has_style:
+        new_cell.font = copy_style(prev_cell.font)
+        new_cell.fill = copy_style(prev_cell.fill)
+        new_cell.border = copy_style(prev_cell.border)
+        new_cell.alignment = copy_style(prev_cell.alignment)
+        new_cell.number_format = prev_cell.number_format
+
+def _apply_groupings_shuoming(ws):
+    """
+    Group columns with outline (+/−):
+      D–E, G, K–L, U–W (best-effort if sheet has fewer columns).
+      NOTE: A–B intentionally NOT grouped.
+    """
+    # D-E
+    _group_cols(ws, 4, 5, hidden=True)
+    # G (single column)
+    _group_cols(ws, 7, 7, hidden=True)
+    # K-L
+    _group_cols(ws, 11, 12, hidden=True)
+    # U–W (21–23). Will silently skip if not present.
+    _group_cols(ws, 21, 23, hidden=True)
+
+
+def _append_shuoming_to_block(ws, header_row: int, rows_count: int, start_col: int, num_cols: int):
+    """
+    In a table block that starts at (header_row, start_col) and spans `num_cols` columns,
+    append a rightmost extra column named 「說明」 and leave all data cells blank.
+    Copies header style from the previous (rightmost) header cell in the block.
+    """
+    dest_col = start_col + num_cols  # the new column index (1-based)
+    # Header
+    ws.cell(row=header_row, column=dest_col, value="說明")
+    prev_header = ws.cell(row=header_row, column=dest_col - 1)
+    new_header  = ws.cell(row=header_row, column=dest_col)
+    if prev_header.has_style:
+        new_header.font         = copy_style(prev_header.font)
+        new_header.fill         = copy_style(prev_header.fill)
+        new_header.border       = copy_style(prev_header.border)
+        new_header.alignment    = copy_style(prev_header.alignment)
+        new_header.number_format= prev_header.number_format
+
+    # Data rows: leave blank (optional: align style with the column on the left)
+    for r in range(header_row + 1, header_row + 1 + rows_count):
+        # if you want to copy style per row:
+        left_cell = ws.cell(row=r, column=dest_col - 1)
+        c         = ws.cell(row=r, column=dest_col, value=None)
+        if left_cell.has_style:
+            c.font         = copy_style(left_cell.font)
+            c.fill         = copy_style(left_cell.fill)
+            c.border       = copy_style(left_cell.border)
+            c.alignment    = copy_style(left_cell.alignment)
+            c.number_format= left_cell.number_format
+
+
 # ---------------- core ----------------
 
 def group_export_by_account(
@@ -392,7 +487,9 @@ def group_export_by_account(
         for ccode, subgrp in summary.groupby("_code"):
              _highlight_code_rows(ccode, subgrp)
 
-
+        rows_count = len(summary)
+        _append_shuoming_to_block(ws, header_row=hdr_row, rows_count=rows_count,
+                                start_col=1, num_cols=len(selected_cols))
                     
         # === NEW: Section 2 header text before 存出保證金 ===
 
@@ -438,6 +535,10 @@ def group_export_by_account(
 
             # Highlight for this 保證金 code
             _highlight_code_rows(code, sub)
+
+            rows_count = len(sub)
+            _append_shuoming_to_block(ws, header_row=start_row, rows_count=rows_count,
+                                    start_col=1, num_cols=len(selected_cols))
 
 
 
@@ -541,6 +642,12 @@ def group_export_by_account(
             for ccode, subgrp in sub.groupby("_code"):
                 _highlight_code_rows(ccode, subgrp)
 
+            # After you've produced rows up to r (exclusive), rows_count is:
+            rows_count = (r - (hdr_row + 1))
+            _append_shuoming_to_block(ws_, header_row=hdr_row, rows_count=rows_count,
+                                    start_col=1, num_cols=len(selected_cols))
+
+
             # One blank row after the block
             return r + 1
 
@@ -607,6 +714,10 @@ def group_export_by_account(
         for ccode, subgrp in sub.groupby("_code"):
             _highlight_code_rows(ccode, subgrp)
 
+        rows_count = (r - (hdr_row + 1))
+        _append_shuoming_to_block(ws_, header_row=hdr_row, rows_count=rows_count,
+                                start_col=1, num_cols=len(selected_cols))
+
         return r + 1  # one blank row after the block
 
     # Two subsections: 暫付款 / 暫收款
@@ -627,6 +738,113 @@ def group_export_by_account(
         cell.font = Font(bold=True)
         row_ptr += 2  # add a blank line after each question
 
+    # === 9. 補充交叉檢查：指定科目對之供應商號碼相同者 ===
+    # Pairs:
+    #   12580100 <-> 21780101
+    #   12810100 <-> 22280201
+    CROSS_PAIRS = [
+        ("12580100", "21780101", "12580100 與 21780101 供應商相同"),
+        ("12810100", "22280201", "12810100 與 22280201 供應商相同"),
+    ]
+
+    # Try to locate supplier-id column
+    SUPPLIER_CANDIDATES = ["供應商號碼", "供應商代碼", "供應商", "Vendor", "Vendor Code"]
+    supplier_col = next((c for c in SUPPLIER_CANDIDATES if c in df_tmp.columns), None)
+
+    # Section title
+    row_ptr = ws.max_row + 2
+    ws.cell(row=row_ptr, column=1, value="— 9. 補充交叉檢查（依供應商號碼交集）").font = Font(bold=True)
+    row_ptr += 2
+
+    def _write_cross_block(ws_, start_row: int, title_text: str,
+                           left_code: str, right_code: str) -> int:
+        ws_.cell(row=start_row, column=1, value=f"→ {title_text}").font = Font(bold=True)
+        r = start_row + 1
+
+        if supplier_col is None:
+            ws_.cell(row=r, column=1, value="（找不到供應商欄位，已略過此檢查）")
+            return r + 2
+
+        left  = df_tmp[df_tmp["_code"] == left_code].copy()
+        right = df_tmp[df_tmp["_code"] == right_code].copy()
+
+        # Normalize supplier values to strings for safe set ops
+        left_ids  = set(left[supplier_col].astype(str).str.strip().dropna())
+        right_ids = set(right[supplier_col].astype(str).str.strip().dropna())
+        common_ids = sorted(left_ids & right_ids)
+
+        if not common_ids:
+            ws_.cell(row=r, column=1, value="無相同供應商號碼")
+            return r + 2
+
+        # --- Table: 列示相同供應商號碼清單 ---
+        ws_.cell(row=r, column=1, value="相同供應商號碼清單：")
+        r += 1
+        ws_.cell(row=r, column=1, value=supplier_col)
+        ws_.cell(row=r, column=1).font = Font(bold=True)
+        r += 1
+        for sid in common_ids:
+            ws_.cell(row=r, column=1, value=sid)
+            r += 1
+
+        # Leave one blank, then details for each side filtered by common supplier ids
+        r += 1
+
+        def _write_details_block(df_side, code_label: str, row_start: int) -> int:
+            ws_.cell(row=row_start, column=1, value=f"{code_label} 明細（僅相同供應商）")
+            row_start += 1
+
+            # Header
+            for j, col_name in enumerate(selected_cols, start=1):
+                ws_.cell(row=row_start, column=j, value=str(col_name))
+            copy_header_style(src_ws, [df_export.columns.get_loc(c) + 1 for c in selected_cols], ws_, dst_row=row_start)
+
+            # Rows
+            data_rows = 0
+            if supplier_col in df_side.columns:
+                df_show = df_side[df_side[supplier_col].astype(str).str.strip().isin(common_ids)]
+                for row_vals in df_show[selected_cols].itertuples(index=False, name=None):
+                    row_start += 1
+                    data_rows += 1
+                    for j, val in enumerate(row_vals, start=1):
+                        header = selected_cols[j-1]
+                        v = to_date_value(val) if header in {"文件日期", "過帳日期"} else val
+                        ws_.cell(row=row_start, column=j, value=v)
+
+                # Date formats
+                header_to_idx = {h: idx+1 for idx, h in enumerate(selected_cols)}
+                for h in {"文件日期", "過帳日期"}:
+                    if h in header_to_idx:
+                        cidx = header_to_idx[h]
+                        for rr in range(row_start - data_rows + 1, row_start + 1):
+                            ws_.cell(row=rr, column=cidx).number_format = "m/d/yyyy"
+
+                # Append 說明 column for this block
+                if data_rows:
+                    _append_shuoming_to_block(ws_, header_row=row_start - data_rows, rows_count=data_rows,
+                                              start_col=1, num_cols=len(selected_cols))
+
+            # one blank line after
+            return row_start + 2
+
+        # Details for left & right codes
+        r = _write_details_block(left,  f"{left_code}",  r)
+        r = _write_details_block(right, f"{right_code}", r)
+        return r
+
+    # Run both cross-checks
+    for (lc, rc, title_txt) in CROSS_PAIRS:
+        row_ptr = _write_cross_block(ws, row_ptr, title_txt, lc, rc)
+
+
+    # === 說明 sheet final touches (NO FILTER) ===
+    ws.freeze_panes = "A2"          # keep header frozen
+    ws.auto_filter.ref = None       # <-- remove filter from row 1
+    _apply_groupings_shuoming(ws)   # skip A–B; group D–E, G, K–L, U–W
+
+    # Optional numeric formatting
+    _format_column_N(ws)            # if you still want N formatted
+
     # === Format columns L and N in 說明 (if they exist) ===
     NUMBER_FMT = '#,##0;[Red](#,##0)'
 
@@ -645,6 +863,12 @@ def group_export_by_account(
             # only format if numeric
             if isinstance(cell.value, (int, float)):
                 cell.number_format = NUMBER_FMT
+
+    # === 說明 column width adjustment ===
+    try:
+        ws.column_dimensions["R"].width = 60   # or 70 if you want more space
+    except Exception:
+        pass
 
     # 7) remove original sheets in the OUTPUT (not touching your source file if you chose a new file)
     #    We will always save to output_path; if not inplace, that's a different file.

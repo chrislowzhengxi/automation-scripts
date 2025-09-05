@@ -163,24 +163,188 @@ def _col_ref_external(p: Path, sheet: str, col_letter: str) -> str:
     col = col_letter.upper()
     return f"'{win_dir}\\[{p.name}]{sheet}'!${col}:${col}"
 
-
-def fill_yingshoukuan_block(ws, mrs0014_path: Path, mrs0014_sheet: str):
+def ensure_local_mrs0014(
+    wb,
+    mrs0014_path: Path | None,
+    mrs0014_sheet: str = "Sheet0",
+    refresh_on_exist: bool = False,
+    copy_used_range_only: bool = False  # False = copy entire sheet values (safe)
+):
     """
-    應收款 block:
-      - Locate header row (col B == '應收款')
-      - Company rows: first data row after the header band to the FIRST '合計' - 1
+    Ensure workbook `wb` has a local sheet 'MRS0014' containing values-only from the external MRS0014 file.
+    - If sheet exists and refresh_on_exist=False -> reuse.
+    - If sheet exists and refresh_on_exist=True  -> delete and reimport.
+    - If sheet missing -> import.
+    - If mrs0014_path is None and sheet missing -> raise (we can't import).
+    """
+    target_name = "MRS0014"
+
+    if target_name in wb.sheetnames and not refresh_on_exist:
+        return  # already available
+
+    if target_name in wb.sheetnames and refresh_on_exist:
+        # remove existing before reimport
+        ws_old = wb[target_name]
+        wb.remove(ws_old)
+
+    if mrs0014_path is None:
+        raise FileNotFoundError("Local 'MRS0014' sheet not present and mrs0014_path was None (cannot import).")
+
+    # Load external workbook values-only
+    ext_wb = load_workbook(mrs0014_path, read_only=True, data_only=True)
+    if mrs0014_sheet in ext_wb.sheetnames:
+        ext_ws = ext_wb[mrs0014_sheet]
+    else:
+        # fallback to first sheet if provided name not found
+        ext_ws = ext_wb[ext_wb.sheetnames[0]]
+
+    # Create local MRS0014
+    ws_local = wb.create_sheet(title=target_name)
+
+    if copy_used_range_only:
+        # Copy values only within ext_ws.used range (approx via ext_ws.max_row/col)
+        max_r, max_c = ext_ws.max_row or 1, ext_ws.max_column or 1
+        for r_idx, row in enumerate(ext_ws.iter_rows(min_row=1, max_row=max_r, min_col=1, max_col=max_c, values_only=True), start=1):
+            for c_idx, val in enumerate(row, start=1):
+                ws_local.cell(row=r_idx, column=c_idx, value=val)
+    else:
+        # Copy entire sheet values (safe default)
+        for r_idx, row in enumerate(ext_ws.iter_rows(values_only=True), start=1):
+            for c_idx, val in enumerate(row, start=1):
+                ws_local.cell(row=r_idx, column=c_idx, value=val)
+
+    ext_wb.close()
+
+
+def ensure_local_mrs0034(
+    wb,
+    mrs0034_path: Path | None,
+    mrs0034_sheet: str = "Sheet0",
+    refresh_on_exist: bool = False,
+    copy_used_range_only: bool = False
+):
+    """
+    Ensure workbook `wb` has a local sheet 'MRS0034' (values-only) copied from the external file.
+    """
+    target_name = "MRS0034"
+
+    if target_name in wb.sheetnames and not refresh_on_exist:
+        return
+
+    if target_name in wb.sheetnames and refresh_on_exist:
+        wb.remove(wb[target_name])
+
+    if mrs0034_path is None:
+        raise FileNotFoundError("Local 'MRS0034' sheet not present and mrs0034_path was None (cannot import).")
+
+    ext_wb = load_workbook(mrs0034_path, read_only=True, data_only=True)
+    ext_ws = ext_wb[mrs0034_sheet] if mrs0034_sheet in ext_wb.sheetnames else ext_wb[ext_wb.sheetnames[0]]
+
+    ws_local = wb.create_sheet(title=target_name)
+
+    if copy_used_range_only:
+        max_r, max_c = ext_ws.max_row or 1, ext_ws.max_column or 1
+        for r_idx, row in enumerate(ext_ws.iter_rows(min_row=1, max_row=max_r, min_col=1, max_col=max_c, values_only=True), start=1):
+            for c_idx, val in enumerate(row, start=1):
+                ws_local.cell(row=r_idx, column=c_idx, value=val)
+    else:
+        for r_idx, row in enumerate(ext_ws.iter_rows(values_only=True), start=1):
+            for c_idx, val in enumerate(row, start=1):
+                ws_local.cell(row=r_idx, column=c_idx, value=val)
+
+    ext_wb.close()
+
+
+# def fill_yingshoukuan_block(ws, mrs0014_path: Path, mrs0014_sheet: str):
+#     """
+#     應收款 block:
+#       - Locate header row (col B == '應收款')
+#       - Company rows: first data row after the header band to the FIRST '合計' - 1
+#       - C = D - M
+#       - D = SUMIF('4-3.應收關係人科餘'!J:J, A_r, '4-3.應收關係人科餘'!Y:Y)
+#       - E = D / ( SUMIF(MRS0014!A:A,"112000",MRS0014!S:S)
+#                 + SUMIF(MRS0014!A:A,"112300",MRS0014!S:S)
+#                 + SUMIF(MRS0014!A:A,"112337",MRS0014!S:S) )
+#       - Totals only on the FIRST '合計' row.
+#     """
+#     hdr = _find_row_ws(ws, 2, "應收款")
+#     if not hdr:
+#         return
+
+#     # Skip the blue section title row and the field header row → data starts at hdr+2
+#     first_candidate = hdr + 2
+#     start = _first_company_row(ws, first_candidate)
+#     if not start:
+#         return
+
+#     total_row = _first_total_row(ws, start)
+#     if not total_row or total_row <= start:
+#         return
+
+#     # Prefer local sheet 'MRS0014' if present; else external workbook
+#     if "MRS0014" in ws.parent.sheetnames:
+#         rngA = _col_ref_local("MRS0014", "A")  # 'MRS0014'!$A:$A
+#         rngS = _col_ref_local("MRS0014", "S")  # 'MRS0014'!$S:$S
+#     else:
+#         rngA = _col_ref_external(mrs0014_path, mrs0014_sheet, "A")
+#         rngS = _col_ref_external(mrs0014_path, mrs0014_sheet, "S")
+
+#     # Fill detail rows
+#     for r in range(start, total_row):
+#         ws.cell(r, 3).value = f"=D{r}-M{r}"
+#         ws.cell(r, 4).value = f"=SUMIF('4-3.應收關係人科餘'!J:J,A{r},'4-3.應收關係人科餘'!Y:Y)"
+#         ws.cell(r, 5).value = (
+#             f"=D{r}/("
+#             f"SUMIF({rngA},\"112000\",{rngS})+"
+#             f"SUMIF({rngA},\"112300\",{rngS})+"
+#             f"SUMIF({rngA},\"112337\",{rngS})"
+#             f")"
+#         )
+
+#     # Totals (FIRST 合計 only)
+#     ws.cell(total_row, 3).value = f"=SUM(C{start}:C{total_row-1})"
+#     ws.cell(total_row, 4).value = f"=SUM(D{start}:D{total_row-1})"
+#     ws.cell(total_row, 5).value = f"=SUM(E{start}:E{total_row-1})"
+
+#     # Percent format for E
+#     PCT_FMT = '0.00%;-0.00%;"-"'
+
+#     for r in range(start, total_row + 1):
+#         ws.cell(r, 5).number_format = PCT_FMT
+
+def fill_yingshoukuan_block(
+    ws,
+    mrs0014_path: Path | None = None,
+    mrs0014_sheet: str = "Sheet0",
+    auto_import_local: bool = True,
+    refresh_on_exist: bool = False
+):
+    """
+    應收款 block (local MRS0014 only):
+      - Auto-import external MRS0014 into a local 'MRS0014' sheet if missing (values-only).
+      - Locate header row (col B == '應收款'), data starts at hdr+2 until FIRST '合計' - 1.
       - C = D - M
       - D = SUMIF('4-3.應收關係人科餘'!J:J, A_r, '4-3.應收關係人科餘'!Y:Y)
-      - E = D / ( SUMIF(MRS0014!A:A,"112000",MRS0014!S:S)
-                + SUMIF(MRS0014!A:A,"112300",MRS0014!S:S)
-                + SUMIF(MRS0014!A:A,"112337",MRS0014!S:S) )
+      - E = D / ( SUMIF('MRS0014'!A:A,"112000",'MRS0014'!S:S)
+                + SUMIF('MRS0014'!A:A,"112300",'MRS0014'!S:S)
+                + SUMIF('MRS0014'!A:A,"112337",'MRS0014'!S:S) )
       - Totals only on the FIRST '合計' row.
     """
+    # Ensure local MRS0014 exists if requested
+    wb = ws.parent
+    if auto_import_local:
+        ensure_local_mrs0014(wb, mrs0014_path, mrs0014_sheet, refresh_on_exist=refresh_on_exist)
+    elif "MRS0014" not in wb.sheetnames:
+        raise FileNotFoundError("Local 'MRS0014' sheet is required but not present. Enable auto_import_local or provide it in template.")
+
+    # Anchor to local MRS0014 ranges
+    rngA = "'MRS0014'!$A:$A"
+    rngS = "'MRS0014'!$S:$S"
+
     hdr = _find_row_ws(ws, 2, "應收款")
     if not hdr:
         return
 
-    # Skip the blue section title row and the field header row → data starts at hdr+2
     first_candidate = hdr + 2
     start = _first_company_row(ws, first_candidate)
     if not start:
@@ -190,18 +354,14 @@ def fill_yingshoukuan_block(ws, mrs0014_path: Path, mrs0014_sheet: str):
     if not total_row or total_row <= start:
         return
 
-    # Prefer local sheet 'MRS0014' if present; else external workbook
-    if "MRS0014" in ws.parent.sheetnames:
-        rngA = _col_ref_local("MRS0014", "A")  # 'MRS0014'!$A:$A
-        rngS = _col_ref_local("MRS0014", "S")  # 'MRS0014'!$S:$S
-    else:
-        rngA = _col_ref_external(mrs0014_path, mrs0014_sheet, "A")
-        rngS = _col_ref_external(mrs0014_path, mrs0014_sheet, "S")
-
     # Fill detail rows
     for r in range(start, total_row):
         ws.cell(r, 3).value = f"=D{r}-M{r}"
         ws.cell(r, 4).value = f"=SUMIF('4-3.應收關係人科餘'!J:J,A{r},'4-3.應收關係人科餘'!Y:Y)"
+        # ws.cell(r, 4).value = (
+        #     f"=D{r}-SUMIF('MRS0014'!A:A,\"112337\",'MRS0014'!S:S)"
+        # )
+
         ws.cell(r, 5).value = (
             f"=D{r}/("
             f"SUMIF({rngA},\"112000\",{rngS})+"
@@ -213,13 +373,52 @@ def fill_yingshoukuan_block(ws, mrs0014_path: Path, mrs0014_sheet: str):
     # Totals (FIRST 合計 only)
     ws.cell(total_row, 3).value = f"=SUM(C{start}:C{total_row-1})"
     ws.cell(total_row, 4).value = f"=SUM(D{start}:D{total_row-1})"
+    # ws.cell(total_row, 4).value = (
+    #     f"=SUM(D{start}:D{total_row-1})"
+    #     f"-SUMIF('MRS0014'!$A:$A,\"112337\",'MRS0014'!$S:$S)"
+    # )
     ws.cell(total_row, 5).value = f"=SUM(E{start}:E{total_row-1})"
 
-    # Percent format for E
+    # Percent format for E (detail + total)
     PCT_FMT = '0.00%;-0.00%;"-"'
-
     for r in range(start, total_row + 1):
         ws.cell(r, 5).number_format = PCT_FMT
+
+    # Optional "post-total check" row (row below 合計) in Column E:
+    # E{total+1} = E{total} + SUMIF('MRS0014'!A:A,"421007",'MRS0014'!S:S)
+    #                        + SUMIF('MRS0014'!A:A,"421807",'MRS0014'!S:S)
+    target_row = total_row + 1
+    next_label = str(ws.cell(target_row, 2).value or "").strip()
+    # If the layout places another section header immediately, insert a spare line first
+    if next_label in {"銷貨", "進貨", "應收款", "應付款"}:
+        ws.insert_rows(target_row)
+
+    # Style like left neighbor & keep number format consistent
+    copy_body_style_from_left(ws, target_row, 5)
+    ws.cell(target_row, 5).number_format = ws.cell(total_row, 5).number_format
+
+    # ws.cell(target_row, 5).value = (
+    #     f"=E{total_row}"
+    #     f"+SUMIF('MRS0014'!$A:$A,\"421007\",'MRS0014'!$S:$S)"
+    #     f"+SUMIF('MRS0014'!$A:$A,\"421807\",'MRS0014'!$S:$S)"
+    # )
+    # Post-total check row for 應收款:
+    # E{total+1} = E{total} - ( D{total} / (SUMIF(112000)+SUMIF(112300)+SUMIF(112337)) )
+    target_row = total_row + 1
+    next_label = str(ws.cell(target_row, 2).value or "").strip()
+    if next_label in {"銷貨", "進貨", "應收款", "應付款"}:
+        ws.insert_rows(target_row)
+
+    copy_body_style_from_left(ws, target_row, 5)
+    ws.cell(target_row, 5).number_format = ws.cell(total_row, 5).number_format
+
+    denom = (
+        "SUMIF('MRS0014'!A:A,\"112000\",'MRS0014'!S:S)+"
+        "SUMIF('MRS0014'!A:A,\"112300\",'MRS0014'!S:S)+"
+        "SUMIF('MRS0014'!A:A,\"112337\",'MRS0014'!S:S)"
+    )
+    ws.cell(target_row, 5).value = f"=E{total_row}-(D{total_row}/({denom}))"
+
 
 BLOCK_W = 9            # A–I
 SPACER_COL = "J"       # width = 1
@@ -262,6 +461,13 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
 
     mrs0034_sheet = _first_sheet_name(mrs0034_path) if mrs0034_path else "Sheet0"
     mrs0014_sheet = _first_sheet_name(mrs0014_path) if mrs0014_path else "Sheet0"
+
+
+    # Ensure local MRS0014 exists for all downstream formulas in this function
+    ensure_local_mrs0014(wb, mrs0014_path, mrs0014_sheet, refresh_on_exist=False)
+    ensure_local_mrs0034(wb, mrs0034_path, mrs0034_sheet, refresh_on_exist=False)
+
+
 
     max_row = ws.max_row
     width   = BLOCK_W  # 9
@@ -517,7 +723,7 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
     #         f"+SUMIF({ext_A14},\"421807\",{ext_S14})"
     #     )
         # ----- Post-total adjustment in Column E (row just below 合計) -----
-    if total_row_e and mrs0014_path:
+    if total_row_e:
         target_row = total_row_e + 1
 
         # If the next row is another section header (e.g., 銷貨/進貨/應收款/應付款), insert a spare row
@@ -525,17 +731,21 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
         if next_label in {"銷貨", "進貨", "應收款", "應付款"}:
             ws.insert_rows(target_row)
 
-        # Prefer local 'MRS0014' sheet; fallback to external
-        if "MRS0014" in ws.parent.sheetnames:
-            A14 = f"'MRS0014'!$A:$A"
-            S14 = f"'MRS0014'!$S:$S"
-        else:
-            A14 = _ext_ref_col(mrs0014_path, mrs0014_sheet, "A")
-            S14 = _ext_ref_col(mrs0014_path, mrs0014_sheet, "S")
+        # # Prefer local 'MRS0014' sheet; fallback to external
+        # if "MRS0014" in ws.parent.sheetnames:
+        #     A14 = f"'MRS0014'!$A:$A"
+        #     S14 = f"'MRS0014'!$S:$S"
+        # else:
+        #     A14 = _ext_ref_col(mrs0014_path, mrs0014_sheet, "A")
+        #     S14 = _ext_ref_col(mrs0014_path, mrs0014_sheet, "S")
 
         # Style & number format like the total row above
         copy_body_style_from_left(ws, target_row, 5)
         ws.cell(target_row, 5).number_format = ws.cell(total_row_e, 5).number_format
+
+        # Local-only MRS0014 references
+        A14 = "'MRS0014'!$A:$A"
+        S14 = "'MRS0014'!$S:$S"
 
         # E{target} = E{total} + SUMIF(...421007...) + SUMIF(...421807...)
         ws.cell(target_row, 5).value = (
@@ -567,26 +777,63 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
             start_row_f = row
         row += 1
 
+    # # =========================
+    # # ----- Column G (new) -----
+    # # G_r = E{r} - ( SUMIFS(MRS[F:F], MRS[A:A],"421007", MRS[D:D], A{r})
+    # #              + SUMIFS(MRS[F:F], MRS[A:A],"421807", MRS[D:D], A{r}) )
+    # # Skip "合計" row (leave blank).
+    # # =========================
+    # if mrs0034_path is None:
+    #     raise ValueError("mrs0034_path not provided")
+    
+    # # try:
+    # #     _mrs_wb = load_workbook(mrs0034_path, read_only=True, data_only=True)
+    # #     mrs_sheet = _mrs_wb.sheetnames[0]  # e.g., 'Sheet0'
+    # #     _mrs_wb.close()
+    # # except Exception:
+    # #     mrs_sheet = "Sheet0"
+
+    # ext_F = _ext_ref_col(mrs0034_path, mrs0034_sheet, "F")
+    # ext_A = _ext_ref_col(mrs0034_path, mrs0034_sheet, "A")
+    # ext_D = _ext_ref_col(mrs0034_path, mrs0034_sheet, "D")
+
+    # row = 4
+    # while True:
+    #     b_val = ws.cell(row, 2).value  # company name / 合計
+    #     if b_val is None:
+    #         break
+    #     if str(b_val).strip() == "合計":
+    #         # per requirement: leave G total row blank (no formula)
+    #         break
+
+    #     # Style like F’s left neighbor
+    #     copy_body_style_from_left(ws, row, 7)  # col 7 = G
+
+    #     # Build the formula
+    #     # =E{r}-(SUMIFS(MRS[F:F],MRS[A:A],"421007",MRS[D:D],A{r})
+    #     #       +SUMIFS(MRS[F:F],MRS[A:A],"421807",MRS[D:D],A{r}))
+    #     # formula_g = (
+    #     #     f"=E{row}-("
+    #     #     f"SUMIFS({ext_F},{ext_A},\"421007\",{ext_D},A{row})+"
+    #     #     f"SUMIFS({ext_F},{ext_A},\"421807\",{ext_D},A{row})"
+    #     #     f")"
+    #     # )
+    #     formula_g = (
+    #         f"=E{row}-("
+    #         f"SUMPRODUCT(({ext_F})*({ext_A}=\"421007\")*({ext_D}=A{row})) + "
+    #         f"SUMPRODUCT(({ext_F})*({ext_A}=\"421807\")*({ext_D}=A{row}))"
+    #         f")"
+    #     )
+    #     _set_formula(ws, row, 7, formula_g, debug_once)  # G column
+    #     row += 1
     # =========================
-    # ----- Column G (new) -----
-    # G_r = E{r} - ( SUMIFS(MRS[F:F], MRS[A:A],"421007", MRS[D:D], A{r})
-    #              + SUMIFS(MRS[F:F], MRS[A:A],"421807", MRS[D:D], A{r}) )
+    # ----- Column G (local MRS0034) -----
+    # G_r = E{r} - (
+    #          SUMIFS('MRS0034'!F:F,'MRS0034'!A:A,"421007",'MRS0034'!D:D,'<this sheet>'!A{r})
+    #        + SUMIFS('MRS0034'!F:F,'MRS0034'!A:A,"421807",'MRS0034'!D:D,'<this sheet>'!A{r})
+    #      )
     # Skip "合計" row (leave blank).
     # =========================
-    if mrs0034_path is None:
-        raise ValueError("mrs0034_path not provided")
-    
-    # try:
-    #     _mrs_wb = load_workbook(mrs0034_path, read_only=True, data_only=True)
-    #     mrs_sheet = _mrs_wb.sheetnames[0]  # e.g., 'Sheet0'
-    #     _mrs_wb.close()
-    # except Exception:
-    #     mrs_sheet = "Sheet0"
-
-    ext_F = _ext_ref_col(mrs0034_path, mrs0034_sheet, "F")
-    ext_A = _ext_ref_col(mrs0034_path, mrs0034_sheet, "A")
-    ext_D = _ext_ref_col(mrs0034_path, mrs0034_sheet, "D")
-
     row = 4
     while True:
         b_val = ws.cell(row, 2).value  # company name / 合計
@@ -599,23 +846,19 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
         # Style like F’s left neighbor
         copy_body_style_from_left(ws, row, 7)  # col 7 = G
 
-        # Build the formula
-        # =E{r}-(SUMIFS(MRS[F:F],MRS[A:A],"421007",MRS[D:D],A{r})
-        #       +SUMIFS(MRS[F:F],MRS[A:A],"421807",MRS[D:D],A{r}))
-        # formula_g = (
-        #     f"=E{row}-("
-        #     f"SUMIFS({ext_F},{ext_A},\"421007\",{ext_D},A{row})+"
-        #     f"SUMIFS({ext_F},{ext_A},\"421807\",{ext_D},A{row})"
-        #     f")"
-        # )
         formula_g = (
             f"=E{row}-("
-            f"SUMPRODUCT(({ext_F})*({ext_A}=\"421007\")*({ext_D}=A{row})) + "
-            f"SUMPRODUCT(({ext_F})*({ext_A}=\"421807\")*({ext_D}=A{row}))"
+            f"SUMIFS('MRS0034'!F:F,'MRS0034'!A:A,\"421007\",'MRS0034'!D:D,'{sheet_name}'!A{row})+"
+            f"SUMIFS('MRS0034'!F:F,'MRS0034'!A:A,\"421807\",'MRS0034'!D:D,'{sheet_name}'!A{row})"
             f")"
         )
-        _set_formula(ws, row, 7, formula_g, debug_once)  # G column
+        ws.cell(row=row, column=7).value = formula_g
         row += 1
+
+    CHECK_FMT = '#,##0;-#,##0;"-"'
+    last_row_g = row - 1
+    for r in range(4, last_row_g + 1):
+        ws.cell(row=r, column=7).number_format = CHECK_FMT
 
     CHECK_FMT = '#,##0;-#,##0;"-"'
 
@@ -625,7 +868,8 @@ def prepare_month_structure(wb_or_path, sheet_name=SHEET_NAME, period_yyyymm: st
 
 
     if mrs0014_path:
-        fill_yingshoukuan_block(ws, mrs0014_path, mrs0014_sheet)
+        # fill_yingshoukuan_block(ws, mrs0014_path, mrs0014_sheet)
+        fill_yingshoukuan_block(ws, mrs0014_path, mrs0014_sheet, auto_import_local=True, refresh_on_exist=False)
 
     return wb
 
@@ -697,7 +941,9 @@ def load_relparty_map(xls_path: Path) -> dict[str, str]:
     return {i: n for i, n in zip(ids, names) if i}
 
 # Accounting format: 2-3 and 4-3
-ACCOUNTING_FMT = "#,##0;[Red](#,##0);0;@"
+# ACCOUNTING_FMT = "#,##0;[Red](#,##0);0;@"
+ACCOUNTING_FMT = '#,##0;[Red](#,##0);"-";@'
+
 
 def apply_accounting_format(ws, col_idx: int, start_row: int, end_row: int):
     for r in range(start_row, end_row + 1):
@@ -824,6 +1070,12 @@ def main():
         "--mrs0014-path",
         help="External MRS0014 workbook path. Defaults to .../ytm_forms/data/template/關係人/MRS0014_I_A01_<period>.xlsx"
     )
+
+    # parser.add_argument(
+    #     "--refresh-mrs0014",
+    #     action="store_true",
+    #     help="Force re-import of local MRS0014 sheet even if it exists."
+    # )
 
     args = parser.parse_args()
     # Base folder inside the repo
